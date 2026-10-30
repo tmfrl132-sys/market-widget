@@ -31,7 +31,7 @@ fun toggleSelection(current: String?, tapped: String): String? = if (current == 
 /** 등락 배지 문구. 부호 대신 ▲▼를 쓴다. */
 fun formatChangeBadge(pct: Double?): String = when (trendOf(pct)) {
     Trend.UP -> "▲" + formatChangePct(pct).removePrefix("+")
-    Trend.DOWN -> "▼" + formatChangePct(abs(pct!!))
+    Trend.DOWN -> "▼" + formatChangePct(abs(pct!!)).removePrefix("+")
     Trend.FLAT -> if (pct == null) "-" else formatChangePct(0.0)
 }
 
