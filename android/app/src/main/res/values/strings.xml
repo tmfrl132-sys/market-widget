@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">경제지표</string>
+    <string name="widget_description">한·미 시세와 다가오는 경제지표 발표 일정</string>
+    <string name="install_guide">홈 화면을 길게 누르고 → 위젯 → 경제지표를 추가하세요.\n\n위젯은 30분마다 새 값으로 바뀌고, 위젯을 누르면 바로 새로고침됩니다.</string>
 </resources>

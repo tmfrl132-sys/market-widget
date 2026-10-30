@@ -21,3 +21,5 @@ jobs:
           gradle-version: "8.10.2"
       - name: 단위 테스트
         run: gradle -p android testDebugUnitTest
+      - name: 디버그 빌드
+        run: gradle -p android assembleDebug
