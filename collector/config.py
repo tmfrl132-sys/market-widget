@@ -22,6 +22,6 @@ FRED_RELEASES: dict[int, str] = {
     53: "미국 GDP",
 }
 
-EVENT_WINDOW_DAYS = 14
+EVENT_WINDOW_DAYS = 31
 HTTP_TIMEOUT = 10
 RETRIES = 3

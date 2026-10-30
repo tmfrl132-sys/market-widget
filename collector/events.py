@@ -20,7 +20,7 @@ def _in_window(day: str, today: date) -> bool:
 
 
 def fetch_fred_events(api_key: str, today: date, get=requests.get) -> list[dict]:
-    """FRED에서 앞으로 14일 안의 미국 지표 발표일을 가져온다. 실패하면 빈 목록."""
+    """FRED에서 앞으로 31일 안의 미국 지표 발표일을 가져온다. 실패하면 빈 목록."""
     items = []
     try:
         for release_id, title in FRED_RELEASES.items():
@@ -42,7 +42,7 @@ def fetch_fred_events(api_key: str, today: date, get=requests.get) -> list[dict]
 
 
 def load_fixed_events(path: Path, today: date) -> list[dict]:
-    """고정 일정표(FOMC·금통위)에서 앞으로 14일 안의 일정만 고른다."""
+    """고정 일정표(FOMC·금통위)에서 앞으로 31일 안의 일정만 고른다."""
     items = json.loads(path.read_text(encoding="utf-8"))
     return [e for e in items if _in_window(e["date"], today)]
 

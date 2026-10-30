@@ -27,11 +27,11 @@ def fred_get(dates):
     return get
 
 
-def test_fred_keeps_only_next_14_days():
-    get = fred_get(["2026-10-29", "2026-10-30", "2026-11-13", "2026-11-14"])
+def test_fred_keeps_only_next_31_days():
+    get = fred_get(["2026-10-29", "2026-10-30", "2026-11-30", "2026-12-01"])
     result = events.fetch_fred_events("KEY", TODAY, get=get)
     cpi = [e for e in result if e["title"] == "미국 CPI"]
-    assert [e["date"] for e in cpi] == ["2026-10-30", "2026-11-13"]
+    assert [e["date"] for e in cpi] == ["2026-10-30", "2026-11-30"]
     assert all(e["country"] == "US" for e in result)
 
 
