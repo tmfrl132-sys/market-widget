@@ -1,5 +1,6 @@
 package com.tmfrl.marketwidget.widget
 
+import android.appwidget.AppWidgetManager
 import android.content.Context
 import androidx.glance.GlanceId
 import androidx.glance.action.ActionParameters
@@ -12,6 +13,13 @@ class MarketWidgetReceiver : GlanceAppWidgetReceiver() {
 
     override fun onEnabled(context: Context) {
         super.onEnabled(context)
+        RefreshWorker.schedule(context)
+        RefreshWorker.runOnce(context)
+    }
+
+    // 앱 업데이트 뒤에도 불린다. 새 버전이 기대하는 형식으로 바로 다시 받고, 주기 작업도 되살린다.
+    override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
+        super.onUpdate(context, appWidgetManager, appWidgetIds)
         RefreshWorker.schedule(context)
         RefreshWorker.runOnce(context)
     }

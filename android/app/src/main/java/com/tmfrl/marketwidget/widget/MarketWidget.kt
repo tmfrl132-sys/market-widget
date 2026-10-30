@@ -183,6 +183,13 @@ private fun QuotesAndDetail(data: MarketData, now: ZonedDateTime, selected: Stri
             val chosen = data.quotes.firstOrNull { it.id == selected }
             if (chosen != null && chosen.chart.size >= 2) {
                 ChartPanel(chosen, size)
+            } else if (chosen != null) {
+                // 앱 업데이트 직후처럼 기기에 저장된 data.json이 차트 데이터 없는 옛 형식일 때
+                Text(
+                    "${chosen.name} 차트 데이터를 받는 중입니다. ⟳를 눌러주세요",
+                    style = style(SUBTLE, 12),
+                    modifier = GlanceModifier.clickable(actionRunCallback<RefreshAction>()),
+                )
             } else {
                 val today = seoulToday(now)
                 EventList(upcomingEvents(data.events, today), today)
