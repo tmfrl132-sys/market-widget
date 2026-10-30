@@ -86,3 +86,18 @@ def test_returns_all_ten_in_config_order():
     result = quotes.fetch_quotes({}, get=ok_get)
     assert [q["id"] for q in result] == [
         "KS11", "KQ11", "GSPC", "IXIC", "KRW", "TNX", "VIX", "CL", "GC", "BTC"]
+
+
+def test_prev_close_when_today_bar_is_null():
+    # 서울 2026-10-28, 29, 30 일봉. 오늘(30일) 봉 close가 아직 null이고 시세는 meta에만 있음.
+    day = 86400
+    base = 1793232000  # 2026-10-28 00:00 UTC
+    payload = {"chart": {"result": [{
+        "meta": {"regularMarketPrice": 110.0, "regularMarketTime": base + 2 * day + 3600,
+                 "gmtoffset": 32400},
+        "timestamp": [base, base + day, base + 2 * day],
+        "indicators": {"quote": [{"close": [90.0, 100.0, None]}]},
+    }]}}
+    price, prev_close, _ = quotes.parse_chart(payload)
+    assert price == 110.0
+    assert prev_close == 100.0

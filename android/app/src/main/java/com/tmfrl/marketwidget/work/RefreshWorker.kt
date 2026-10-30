@@ -1,7 +1,6 @@
 package com.tmfrl.marketwidget.work
 
 import android.content.Context
-import androidx.glance.appwidget.updateAll
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -12,7 +11,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.tmfrl.marketwidget.data.Repository
-import com.tmfrl.marketwidget.widget.MarketWidget
+import com.tmfrl.marketwidget.widget.redrawAllWidgets
 import java.util.concurrent.TimeUnit
 
 /** 30분마다 data.json을 받아 위젯을 다시 그린다. */
@@ -20,7 +19,7 @@ class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorke
 
     override suspend fun doWork(): Result {
         Repository.forContext(applicationContext).refresh()
-        MarketWidget().updateAll(applicationContext)
+        redrawAllWidgets(applicationContext)
         return Result.success()
     }
 

@@ -2,6 +2,7 @@
 
 import logging
 import time
+from datetime import datetime, timezone
 from urllib.parse import quote
 
 import requests
@@ -17,11 +18,24 @@ HEADERS = {"User-Agent": "Mozilla/5.0"}
 def parse_chart(payload: dict) -> tuple[float, float, list[float]]:
     """(현재값, 전일 종가, 최근 5개 종가)를 돌려준다."""
     result = payload["chart"]["result"][0]
-    closes = [c for c in result["indicators"]["quote"][0]["close"] if c is not None]
-    price = result["meta"].get("regularMarketPrice") or closes[-1]
-    # 마지막 봉이 오늘(또는 마지막 거래일)이므로 그 앞 봉이 전일 종가다
+    meta = result["meta"]
+    bars = [(ts, c) for ts, c in zip(result["timestamp"], result["indicators"]["quote"][0]["close"])
+            if c is not None]
+    closes = [c for _, c in bars]
+    price = meta.get("regularMarketPrice") or closes[-1]
+    # 마지막 유효 봉이 시세 시각과 같은 날이면 그 앞 봉이 전일 종가다.
+    # 오늘 봉이 아직 비어 있으면(null) 마지막 유효 봉이 곧 전일 종가다.
     prev_close = closes[-2]
+    market_time = meta.get("regularMarketTime")
+    if market_time is not None:
+        offset = meta.get("gmtoffset", 0)
+        if _local_date(bars[-1][0], offset) != _local_date(market_time, offset):
+            prev_close = closes[-1]
     return price, prev_close, closes[-5:]
+
+
+def _local_date(ts: int, offset: int):
+    return datetime.fromtimestamp(ts + offset, timezone.utc).date()
 
 
 def _get_chart(symbol: str, get) -> dict:

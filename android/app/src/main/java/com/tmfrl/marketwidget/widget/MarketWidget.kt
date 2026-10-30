@@ -10,8 +10,14 @@ import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.LocalSize
 import androidx.glance.action.clickable
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.glance.appwidget.GlanceAppWidget
+import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.glance.appwidget.SizeMode
+import androidx.glance.appwidget.state.updateAppWidgetState
+import androidx.glance.appwidget.updateAll
+import androidx.glance.currentState
 import androidx.glance.appwidget.action.actionRunCallback
 import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.provideContent
@@ -53,16 +59,29 @@ private val SUBTLE = Color(0xFF757575)
 private val UP = Color(0xFFD32F2F)
 private val DOWN = Color(0xFF1976D2)
 
+/** 새 데이터를 받을 때마다 올리는 값. 위젯 상태가 바뀌어야 Glance가 다시 그린다. */
+private val DATA_VERSION = longPreferencesKey("data_version")
+
 class MarketWidget : GlanceAppWidget() {
     override val sizeMode = SizeMode.Responsive(setOf(SMALL, LARGE))
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val repository = Repository.forContext(context)
         provideContent {
-            // updateAll이 다시 그릴 때마다 캐시를 새로 읽는다
+            // 상태를 읽어 두면 DATA_VERSION이 바뀔 때마다 다시 그리면서 캐시를 새로 읽는다
+            currentState<Preferences>()[DATA_VERSION]
             WidgetContent(repository.cached(), ZonedDateTime.now())
         }
     }
+}
+
+/** 모든 위젯의 상태 버전을 올리고 다시 그린다. */
+suspend fun redrawAllWidgets(context: Context) {
+    val ids = GlanceAppWidgetManager(context).getGlanceIds(MarketWidget::class.java)
+    ids.forEach { id ->
+        updateAppWidgetState(context, id) { it[DATA_VERSION] = System.currentTimeMillis() }
+    }
+    MarketWidget().updateAll(context)
 }
 
 private fun style(color: Color, size: Int, bold: Boolean = false) = TextStyle(
@@ -93,9 +112,10 @@ private fun WidgetContent(data: MarketData?, now: ZonedDateTime) {
                 val today = seoulToday(now)
                 Spacer(GlanceModifier.height(6.dp))
                 EventList(upcomingEvents(data.events, today), today)
-                Spacer(GlanceModifier.defaultWeight())
-                Footer(data, now)
             }
+            // 작은 크기에서도 갱신 시각은 보여야 오래된 값을 알아챌 수 있다
+            Spacer(GlanceModifier.defaultWeight())
+            Footer(data, now)
         }
     }
 }
@@ -108,7 +128,7 @@ private fun QuoteTile(quote: Quote, modifier: GlanceModifier) {
         Trend.DOWN -> DOWN
         Trend.FLAT -> SUBTLE
     }
-    Column(modifier = modifier.padding(horizontal = 2.dp, vertical = 3.dp)) {
+    Column(modifier = modifier.padding(horizontal = 2.dp, vertical = 1.dp)) {
         Text(quote.name, style = style(SUBTLE.copy(alpha = alpha), 10), maxLines = 1)
         Text(formatPrice(quote.price), style = style(TEXT.copy(alpha = alpha), 13, bold = true), maxLines = 1)
         Text(formatChangePct(quote.change_pct), style = style(trendColor.copy(alpha = alpha), 10), maxLines = 1)
