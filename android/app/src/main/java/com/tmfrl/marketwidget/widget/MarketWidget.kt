@@ -65,6 +65,11 @@ import com.tmfrl.marketwidget.model.upcomingEvents
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.ZonedDateTime
+import androidx.glance.appwidget.RadioButton
+import androidx.glance.appwidget.RadioButtonDefaults
+import com.tmfrl.marketwidget.model.Period
+import com.tmfrl.marketwidget.model.chartValues
+import com.tmfrl.marketwidget.model.parsePeriod
 import com.tmfrl.marketwidget.model.eventRows
 import com.tmfrl.marketwidget.model.fitBitmap
 
@@ -99,6 +104,10 @@ private val DATA_VERSION = longPreferencesKey("data_version")
 private val SELECTED = stringPreferencesKey("selected")
 private val QUOTE_ID = ActionParameters.Key<String>("quote_id")
 
+/** 차트 기간(Period.name). 위젯마다 따로 기억한다. */
+private val PERIOD = stringPreferencesKey("period")
+private val PERIOD_NAME = ActionParameters.Key<String>("period_name")
+
 class MarketWidget : GlanceAppWidget() {
     // 실제 크기로 그려야 위젯을 늘린 만큼 차트·일정 칸이 커진다
     override val sizeMode = SizeMode.Exact
@@ -106,11 +115,20 @@ class MarketWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val repository = Repository.forContext(context)
         provideContent {
-            // 상태를 읽어 두면 DATA_VERSION·SELECTED가 바뀔 때마다 다시 그리면서 캐시를 새로 읽는다
+            // 상태를 읽어 두면 DATA_VERSION·SELECTED·PERIOD가 바뀔 때마다 다시 그리면서 캐시를 새로 읽는다
             val state = currentState<Preferences>()
             state[DATA_VERSION]
-            WidgetContent(repository.cached(), ZonedDateTime.now(), state[SELECTED])
+            WidgetContent(repository.cached(), ZonedDateTime.now(), state[SELECTED], parsePeriod(state[PERIOD]))
         }
+    }
+}
+
+/** 기간 라디오 버튼을 누르면 그 기간을 기억하고 다시 그린다. */
+class SelectPeriodAction : ActionCallback {
+    override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
+        val name = parameters[PERIOD_NAME] ?: return
+        updateAppWidgetState(context, glanceId) { it[PERIOD] = name }
+        MarketWidget().update(context, glanceId)
     }
 }
 
@@ -152,7 +170,7 @@ private fun trendColors(pct: Double?): Pair<Color, Color> = when (trendOf(pct)) 
 private fun Dp.toPx(density: Float) = (value * density).toInt()
 
 @Composable
-private fun WidgetContent(data: MarketData?, now: ZonedDateTime, selected: String?) {
+private fun WidgetContent(data: MarketData?, now: ZonedDateTime, selected: String?, period: Period) {
     val size = LocalSize.current
     val large = size.height >= DETAIL_MIN_HEIGHT
     Column(
@@ -170,14 +188,14 @@ private fun WidgetContent(data: MarketData?, now: ZonedDateTime, selected: Strin
                 modifier = GlanceModifier.clickable(actionRunCallback<RefreshAction>()),
             )
         } else {
-            QuotesAndDetail(data, now, selected, size, large, GlanceModifier.defaultWeight())
+            QuotesAndDetail(data, now, selected, period, size, large, GlanceModifier.defaultWeight())
         }
     }
 }
 
 @Composable
 private fun QuotesAndDetail(
-    data: MarketData, now: ZonedDateTime, selected: String?, size: DpSize, large: Boolean,
+    data: MarketData, now: ZonedDateTime, selected: String?, period: Period, size: DpSize, large: Boolean,
     modifier: GlanceModifier,
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
@@ -194,8 +212,8 @@ private fun QuotesAndDetail(
             // 시세 두 줄 아래 남는 높이를 모두 차트·일정이 쓴다
             val detailHeight = maxOf(60.dp, size.height - TOP_PART_HEIGHT)
             val chosen = data.quotes.firstOrNull { it.id == selected }
-            if (chosen != null && chosen.chart.size >= 2) {
-                ChartPanel(chosen, size.width - 20.dp, detailHeight, GlanceModifier.defaultWeight())
+            if (chosen != null && chartValues(chosen, period).size >= 2) {
+                ChartPanel(chosen, period, size.width - 20.dp, detailHeight, GlanceModifier.defaultWeight())
             } else if (chosen != null) {
                 // 앱 업데이트 직후처럼 기기에 저장된 data.json이 차트 데이터 없는 옛 형식일 때
                 Text(
@@ -272,18 +290,19 @@ private fun QuoteTile(quote: Quote, selected: Boolean, showSpark: Boolean, tileW
 }
 
 @Composable
-private fun ChartPanel(quote: Quote, width: Dp, height: Dp, modifier: GlanceModifier) {
-    val summary = chartSummary(quote.chart) ?: return
+private fun ChartPanel(quote: Quote, period: Period, width: Dp, height: Dp, modifier: GlanceModifier) {
+    val values = chartValues(quote, period)
+    val summary = chartSummary(values) ?: return
     val (color, tint) = trendColors(summary.changePct)
     val density = LocalContext.current.resources.displayMetrics.density
-    // 차트 그림 높이 = 칸 높이 - 위 두 줄(이름·최저최고) - 아래 한 줄(기간 표시)
-    val imageHeight = maxOf(40.dp, height - 52.dp)
+    // 차트 그림 높이 = 칸 높이 - 위 두 줄(이름·최저최고) - 아래 두 줄(기간 표시, 기간 선택)
+    val imageHeight = maxOf(40.dp, height - 84.dp)
     // 전송 크기 제한 때문에 픽셀 수를 줄이고 위젯이 늘려서 그리게 한다
     val fullW = width.toPx(density)
     val (bw, bh) = fitBitmap(fullW, imageHeight.toPx(density), MAX_CHART_PIXELS)
     val scale = bw.toFloat() / fullW
     val bitmap = renderLine(
-        values = quote.chart,
+        values = values,
         lineColor = color.toArgb(),
         backgroundColor = BACKGROUND.toArgb(),
         widthPx = bw,
@@ -291,13 +310,15 @@ private fun ChartPanel(quote: Quote, width: Dp, height: Dp, modifier: GlanceModi
         strokePx = 2.5f * density * scale,
         detailed = true,
     )
-    Column(
-        modifier = modifier.fillMaxWidth()
-            .clickable(actionRunCallback<SelectQuoteAction>(actionParametersOf(QUOTE_ID to quote.id))),
-    ) {
-        Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+    // 차트나 머리줄을 누르면 닫는다. 기간 선택 줄은 따로 눌린다.
+    val close = actionRunCallback<SelectQuoteAction>(actionParametersOf(QUOTE_ID to quote.id))
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = GlanceModifier.fillMaxWidth().clickable(close),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text(quote.name, style = style(TEXT, 13, bold = true))
-            Text("  3개월", style = style(SUBTLE, 10))
+            Text("  ${period.label}", style = style(SUBTLE, 10))
             Spacer(GlanceModifier.defaultWeight())
             Box(modifier = GlanceModifier.background(tint).cornerRadius(6.dp).padding(horizontal = 6.dp, vertical = 2.dp)) {
                 Text(formatChangeBadge(summary.changePct), style = style(color, 11, bold = true))
@@ -310,14 +331,36 @@ private fun ChartPanel(quote: Quote, width: Dp, height: Dp, modifier: GlanceModi
         Spacer(GlanceModifier.height(4.dp))
         Image(
             provider = ImageProvider(bitmap),
-            contentDescription = "${quote.name} 3개월 차트",
+            contentDescription = "${quote.name} ${period.label} 차트",
             contentScale = ContentScale.FillBounds,
-            modifier = GlanceModifier.fillMaxWidth().defaultWeight(),
+            modifier = GlanceModifier.fillMaxWidth().defaultWeight().clickable(close),
         )
         Row(modifier = GlanceModifier.fillMaxWidth().padding(top = 2.dp)) {
-            Text("3개월 전", style = style(SUBTLE, 10))
+            Text(period.agoLabel, style = style(SUBTLE, 10))
             Spacer(GlanceModifier.defaultWeight())
             Text("현재 ${formatPrice(quote.price)}", style = style(color, 10, bold = true))
+        }
+        PeriodSelector(period)
+    }
+}
+
+/** 차트 아래 라디오 버튼 줄. 누르면 바로 그 기간으로 바뀐다. */
+@Composable
+private fun PeriodSelector(current: Period) {
+    val colors = RadioButtonDefaults.colors(
+        checkedColor = ColorProvider(DOWN),
+        uncheckedColor = ColorProvider(SUBTLE),
+    )
+    Row(modifier = GlanceModifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        Period.entries.forEach { p ->
+            RadioButton(
+                checked = p == current,
+                onClick = actionRunCallback<SelectPeriodAction>(actionParametersOf(PERIOD_NAME to p.name)),
+                text = p.label,
+                style = style(if (p == current) TEXT else SUBTLE, 11, bold = p == current),
+                colors = colors,
+                modifier = GlanceModifier.defaultWeight(),
+            )
         }
     }
 }

@@ -14,7 +14,9 @@ data class Quote(
     val change: Double?,
     val change_pct: Double?,
     val history: List<Double> = emptyList(),
-    val chart: List<Double> = emptyList(), // 3개월 일봉 종가
+    val chart: List<Double> = emptyList(), // 3개월 일봉 종가 (v0.3.0 이하 호환)
+    val daily: List<Double> = emptyList(), // 1년 일봉 종가
+    val weekly: List<Double> = emptyList(), // 5년 주봉 종가
 
     val stale: Boolean = false,
 )
