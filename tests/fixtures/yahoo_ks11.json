@@ -1,0 +1,5 @@
+{"chart": {"result": [{
+  "meta": {"symbol": "^KS11", "regularMarketPrice": 2650.12, "chartPreviousClose": 2500.0},
+  "timestamp": [1, 2, 3, 4, 5, 6, 7],
+  "indicators": {"quote": [{"close": [2600.0, 2610.0, 2622.5, 2630.1, 2637.82, 2650.12, null]}]}
+}], "error": null}}
