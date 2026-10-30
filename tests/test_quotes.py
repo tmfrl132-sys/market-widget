@@ -101,3 +101,27 @@ def test_prev_close_when_today_bar_is_null():
     price, prev_close, _ = quotes.parse_chart(payload)
     assert price == 110.0
     assert prev_close == 100.0
+
+
+def test_fetch_quotes_includes_chart_closes():
+    ks11 = next(q for q in quotes.fetch_quotes({}, get=ok_get) if q["id"] == "KS11")
+    assert ks11["chart"] == [2600.0, 2610.0, 2622.5, 2630.1, 2637.82, 2650.12]
+
+
+def test_chart_url_requests_three_months():
+    urls = []
+
+    def get(url, **kwargs):
+        urls.append(url)
+        return FakeResponse(FIXTURE)
+
+    quotes.fetch_quotes({}, get=get)
+    assert "range=3mo" in urls[0] and "interval=1d" in urls[0]
+
+
+def test_failed_symbol_without_previous_has_empty_chart():
+    def failing_get(url, **kwargs):
+        raise requests.ConnectionError("down")
+
+    ks11 = next(q for q in quotes.fetch_quotes({}, get=failing_get) if q["id"] == "KS11")
+    assert ks11["chart"] == []

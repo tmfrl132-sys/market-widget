@@ -11,7 +11,7 @@ from collector.config import HTTP_TIMEOUT, RETRIES, SYMBOLS
 
 log = logging.getLogger(__name__)
 
-CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=10d&interval=1d"
+CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=3mo&interval=1d"
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 
@@ -32,6 +32,12 @@ def parse_chart(payload: dict) -> tuple[float, float, list[float]]:
         if _local_date(bars[-1][0], offset) != _local_date(market_time, offset):
             prev_close = closes[-1]
     return price, prev_close, closes[-5:]
+
+
+def chart_closes(payload: dict) -> list[float]:
+    """위젯 차트용 3개월 일봉 종가 (null 제외, 소수 둘째 자리)."""
+    closes = payload["chart"]["result"][0]["indicators"]["quote"][0]["close"]
+    return [round(c, 2) for c in closes if c is not None]
 
 
 def _local_date(ts: int, offset: int):
@@ -56,13 +62,14 @@ def fetch_quotes(prev: dict[str, dict], get=requests.get) -> list[dict]:
     items = []
     for id_, name, symbol in SYMBOLS:
         try:
-            price, prev_close, history = parse_chart(_get_chart(symbol, get))
+            payload = _get_chart(symbol, get)
+            price, prev_close, history = parse_chart(payload)
             change = price - prev_close
             items.append({
                 "id": id_, "name": name, "price": price,
                 "change": round(change, 2),
                 "change_pct": round(change / prev_close * 100, 2),
-                "history": history, "stale": False,
+                "history": history, "chart": chart_closes(payload), "stale": False,
             })
         except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as e:
             log.warning("%s 시세 실패: %s", symbol, e)
@@ -71,5 +78,5 @@ def fetch_quotes(prev: dict[str, dict], get=requests.get) -> list[dict]:
                 items.append({**old, "stale": True})
             else:
                 items.append({"id": id_, "name": name, "price": None, "change": None,
-                              "change_pct": None, "history": [], "stale": True})
+                              "change_pct": None, "history": [], "chart": [], "stale": True})
     return items
