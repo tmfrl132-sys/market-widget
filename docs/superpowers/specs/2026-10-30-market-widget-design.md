@@ -63,7 +63,7 @@ GitHub Actions (태그 push 시)
 
 ### 발표 일정
 
-- 미국 지표: FRED 발표일 API(`fred/releases/dates`)로 앞으로 14일 안의 CPI, 고용보고서,
+- 미국 지표: FRED 발표일 API(`fred/release/dates`, 지표별 호출)로 앞으로 14일 안의 CPI, 고용보고서,
   PCE, GDP 발표일을 가져온다. FRED 무료 인증키가 필요하며 GitHub Secrets
   `FRED_API_KEY`에 둔다.
 - FOMC·한국은행 금통위: `collector/schedule.json`에 공식 일정을 직접 적는다. 1년에 한 번 갱신한다.
@@ -73,7 +73,7 @@ GitHub Actions (태그 push 시)
 - GitHub Actions cron, 30분 간격.
 - 한국 시간 토요일 08:00부터 월요일 07:00까지는 건너뛴다. 미국 장이 끝난 뒤라 비트코인만
   바뀌는 시간이어서 갱신할 가치가 작다.
-- 결과 `data.json`을 GitHub Pages(`gh-pages` 브랜치)에 올린다.
+- 결과 `data.json`을 GitHub Pages에 올린다 (`actions/deploy-pages`, 별도 브랜치 없음).
 
 ### 실패 처리
 
@@ -106,7 +106,7 @@ GitHub Actions (태그 push 시)
 
 - 위: 시세 타일 10개, 5개씩 두 줄. 타일마다 이름, 현재값, 등락률. 상승 빨강, 하락 파랑.
   `stale`인 항목은 흐리게 표시한다.
-- 아래: 다가오는 발표 일정 3~4개 (`11/13(목) 미국 CPI`). 오늘 발표는 강조한다.
+- 아래: 다가오는 발표 일정 3~4개 (`11/13(금) 미국 CPI`). 오늘 발표는 강조한다.
 - 맨 아래: 마지막 갱신 시각(`10:30 기준`)과 새로고침 버튼.
 - 위젯이 작아지면 시세 타일만 보이고 일정은 숨긴다.
 
