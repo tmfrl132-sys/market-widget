@@ -36,6 +36,26 @@ class ChartTest {
         assertNull(chartSummary(emptyList()))
     }
 
+    @Test fun formatChangeBadge_arrowAndAbsoluteValue() {
+        assertEquals("▲0.47%", formatChangeBadge(0.47))
+        assertEquals("▼1.20%", formatChangeBadge(-1.2))
+        assertEquals("0.00%", formatChangeBadge(0.0))
+        assertEquals("-", formatChangeBadge(null))
+    }
+
+    @Test fun formatDday_todayTomorrowAndCount() {
+        val today = java.time.LocalDate.of(2026, 10, 31)
+        assertEquals("오늘", formatDday(today, today))
+        assertEquals("내일", formatDday(today.plusDays(1), today))
+        assertEquals("D-6", formatDday(today.plusDays(6), today))
+    }
+
+    @Test fun flagOf_country() {
+        assertEquals("🇺🇸", flagOf("US"))
+        assertEquals("🇰🇷", flagOf("KR"))
+        assertEquals("", flagOf("JP"))
+    }
+
     @Test fun toggleSelection_selectsAndClears() {
         assertEquals("KS11", toggleSelection(current = null, tapped = "KS11"))
         assertEquals("BTC", toggleSelection(current = "KS11", tapped = "BTC"))

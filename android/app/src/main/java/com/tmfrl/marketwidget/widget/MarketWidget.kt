@@ -3,33 +3,45 @@ package com.tmfrl.marketwidget.widget
 import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.glance.GlanceId
-import androidx.glance.GlanceModifier
-import androidx.glance.LocalSize
-import androidx.glance.action.clickable
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.glance.GlanceId
+import androidx.glance.GlanceModifier
+import androidx.glance.Image
+import androidx.glance.ImageProvider
+import androidx.glance.LocalContext
+import androidx.glance.LocalSize
+import androidx.glance.action.ActionParameters
+import androidx.glance.action.actionParametersOf
+import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.glance.appwidget.SizeMode
-import androidx.glance.appwidget.state.updateAppWidgetState
-import androidx.glance.appwidget.updateAll
-import androidx.glance.currentState
+import androidx.glance.appwidget.action.ActionCallback
 import androidx.glance.appwidget.action.actionRunCallback
 import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.provideContent
+import androidx.glance.appwidget.state.updateAppWidgetState
+import androidx.glance.appwidget.updateAll
 import androidx.glance.background
+import androidx.glance.currentState
 import androidx.glance.layout.Alignment
+import androidx.glance.layout.Box
 import androidx.glance.layout.Column
+import androidx.glance.layout.ContentScale
 import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
 import androidx.glance.layout.fillMaxSize
 import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.height
 import androidx.glance.layout.padding
+import androidx.glance.layout.width
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
@@ -39,28 +51,46 @@ import com.tmfrl.marketwidget.model.Event
 import com.tmfrl.marketwidget.model.MarketData
 import com.tmfrl.marketwidget.model.Quote
 import com.tmfrl.marketwidget.model.Trend
-import com.tmfrl.marketwidget.model.formatChangePct
+import com.tmfrl.marketwidget.model.chartSummary
+import com.tmfrl.marketwidget.model.flagOf
+import com.tmfrl.marketwidget.model.formatChangeBadge
+import com.tmfrl.marketwidget.model.formatDday
 import com.tmfrl.marketwidget.model.formatEventDate
 import com.tmfrl.marketwidget.model.formatPrice
 import com.tmfrl.marketwidget.model.formatUpdatedAt
 import com.tmfrl.marketwidget.model.seoulToday
+import com.tmfrl.marketwidget.model.toggleSelection
 import com.tmfrl.marketwidget.model.trendOf
 import com.tmfrl.marketwidget.model.upcomingEvents
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.ZonedDateTime
+import kotlin.math.min
 
 private val SMALL = DpSize(250.dp, 110.dp)
 private val LARGE = DpSize(320.dp, 220.dp)
 
-private val BACKGROUND = Color(0xF2FFFFFF)
-private val TEXT = Color(0xFF212121)
-private val SUBTLE = Color(0xFF757575)
-private val UP = Color(0xFFD32F2F)
-private val DOWN = Color(0xFF1976D2)
+// 어두운 카드 디자인. 상승 빨강·하락 파랑은 어두운 배경에서 잘 보이게 밝게 잡았다.
+private val BACKGROUND = Color(0xFF111827)
+private val TILE = Color(0xFF1B2433)
+private val TILE_SELECTED = Color(0xFF2B3A55)
+private val TEXT = Color(0xFFF3F4F6)
+private val SUBTLE = Color(0xFF8B95A7)
+private val UP = Color(0xFFFF5A5F)
+private val DOWN = Color(0xFF4D8DFF)
+private val UP_TINT = Color(0x33FF5A5F)
+private val DOWN_TINT = Color(0x334D8DFF)
+private val FLAT_TINT = Color(0x338B95A7)
+
+private const val SPARK_POINTS = 20
+private const val MAX_CHART_WIDTH_PX = 720
 
 /** 새 데이터를 받을 때마다 올리는 값. 위젯 상태가 바뀌어야 Glance가 다시 그린다. */
 private val DATA_VERSION = longPreferencesKey("data_version")
+
+/** 차트를 보여줄 종목 id. 없으면 발표 일정을 보여준다. */
+private val SELECTED = stringPreferencesKey("selected")
+private val QUOTE_ID = ActionParameters.Key<String>("quote_id")
 
 class MarketWidget : GlanceAppWidget() {
     override val sizeMode = SizeMode.Responsive(setOf(SMALL, LARGE))
@@ -68,9 +98,10 @@ class MarketWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val repository = Repository.forContext(context)
         provideContent {
-            // 상태를 읽어 두면 DATA_VERSION이 바뀔 때마다 다시 그리면서 캐시를 새로 읽는다
-            currentState<Preferences>()[DATA_VERSION]
-            WidgetContent(repository.cached(), ZonedDateTime.now())
+            // 상태를 읽어 두면 DATA_VERSION·SELECTED가 바뀔 때마다 다시 그리면서 캐시를 새로 읽는다
+            val state = currentState<Preferences>()
+            state[DATA_VERSION]
+            WidgetContent(repository.cached(), ZonedDateTime.now(), state[SELECTED])
         }
     }
 }
@@ -84,79 +115,212 @@ suspend fun redrawAllWidgets(context: Context) {
     MarketWidget().updateAll(context)
 }
 
+/** 시세 타일을 누르면 그 종목 차트를 보여주고, 다시 누르면 일정으로 돌아간다. */
+class SelectQuoteAction : ActionCallback {
+    override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
+        val tapped = parameters[QUOTE_ID] ?: return
+        updateAppWidgetState(context, glanceId) { prefs ->
+            when (val next = toggleSelection(prefs[SELECTED], tapped)) {
+                null -> prefs.remove(SELECTED)
+                else -> prefs[SELECTED] = next
+            }
+        }
+        MarketWidget().update(context, glanceId)
+    }
+}
+
 private fun style(color: Color, size: Int, bold: Boolean = false) = TextStyle(
     color = ColorProvider(color),
     fontSize = size.sp,
     fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
 )
 
+private fun trendColors(pct: Double?): Pair<Color, Color> = when (trendOf(pct)) {
+    Trend.UP -> UP to UP_TINT
+    Trend.DOWN -> DOWN to DOWN_TINT
+    Trend.FLAT -> SUBTLE to FLAT_TINT
+}
+
+private fun Dp.toPx(density: Float) = (value * density).toInt()
+
 @Composable
-private fun WidgetContent(data: MarketData?, now: ZonedDateTime) {
-    val showEvents = LocalSize.current.height >= LARGE.height
+private fun WidgetContent(data: MarketData?, now: ZonedDateTime, selected: String?) {
+    val size = LocalSize.current
+    val large = size.height >= LARGE.height
     Column(
         modifier = GlanceModifier.fillMaxSize()
             .background(BACKGROUND)
-            .cornerRadius(16.dp)
-            .padding(8.dp)
-            .clickable(actionRunCallback<RefreshAction>()),
+            .cornerRadius(20.dp)
+            .padding(10.dp),
     ) {
+        Header(data, now)
+        Spacer(GlanceModifier.height(6.dp))
         if (data == null) {
-            Text("시세를 불러오는 중입니다. 눌러서 새로고침", style = style(SUBTLE, 12))
+            Text(
+                "시세를 불러오는 중입니다. 눌러서 새로고침",
+                style = style(SUBTLE, 12),
+                modifier = GlanceModifier.clickable(actionRunCallback<RefreshAction>()),
+            )
         } else {
-            data.quotes.chunked(5).forEach { row ->
-                Row(modifier = GlanceModifier.fillMaxWidth()) {
-                    row.forEach { QuoteTile(it, GlanceModifier.defaultWeight()) }
-                }
-            }
-            if (showEvents) {
-                val today = seoulToday(now)
-                Spacer(GlanceModifier.height(6.dp))
-                EventList(upcomingEvents(data.events, today), today)
-            }
-            // 작은 크기에서도 갱신 시각은 보여야 오래된 값을 알아챌 수 있다
-            Spacer(GlanceModifier.defaultWeight())
-            Footer(data, now)
+            QuotesAndDetail(data, now, selected, size, large)
         }
     }
 }
 
 @Composable
-private fun QuoteTile(quote: Quote, modifier: GlanceModifier) {
-    val alpha = if (quote.stale) 0.5f else 1f
-    val trendColor = when (trendOf(quote.change_pct)) {
-        Trend.UP -> UP
-        Trend.DOWN -> DOWN
-        Trend.FLAT -> SUBTLE
+private fun QuotesAndDetail(data: MarketData, now: ZonedDateTime, selected: String?, size: DpSize, large: Boolean) {
+    Column(modifier = GlanceModifier.fillMaxWidth()) {
+        val tileWidth = (size.width - 20.dp) / 5 - 4.dp
+        data.quotes.chunked(5).forEach { row ->
+            Row(modifier = GlanceModifier.fillMaxWidth()) {
+                row.forEach {
+                    QuoteTile(it, it.id == selected, showSpark = large, tileWidth, GlanceModifier.defaultWeight())
+                }
+            }
+        }
+        if (large) {
+            Spacer(GlanceModifier.height(8.dp))
+            val chosen = data.quotes.firstOrNull { it.id == selected }
+            if (chosen != null && chosen.chart.size >= 2) {
+                ChartPanel(chosen, size)
+            } else {
+                val today = seoulToday(now)
+                EventList(upcomingEvents(data.events, today), today)
+            }
+        }
     }
-    Column(modifier = modifier.padding(horizontal = 2.dp, vertical = 1.dp)) {
-        Text(quote.name, style = style(SUBTLE.copy(alpha = alpha), 10), maxLines = 1)
-        Text(formatPrice(quote.price), style = style(TEXT.copy(alpha = alpha), 13, bold = true), maxLines = 1)
-        Text(formatChangePct(quote.change_pct), style = style(trendColor.copy(alpha = alpha), 10), maxLines = 1)
+}
+
+@Composable
+private fun Header(data: MarketData?, now: ZonedDateTime) {
+    Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text("경제지표", style = style(TEXT, 13, bold = true))
+        Spacer(GlanceModifier.defaultWeight())
+        if (data != null) {
+            Text(formatUpdatedAt(OffsetDateTime.parse(data.updated_at), now), style = style(SUBTLE, 10))
+        }
+        Box(
+            modifier = GlanceModifier.padding(start = 8.dp, end = 2.dp)
+                .clickable(actionRunCallback<RefreshAction>()),
+        ) {
+            Text("⟳", style = style(TEXT, 15, bold = true))
+        }
+    }
+}
+
+@Composable
+private fun QuoteTile(quote: Quote, selected: Boolean, showSpark: Boolean, tileWidth: Dp, modifier: GlanceModifier) {
+    val alpha = if (quote.stale) 0.5f else 1f
+    val tileColor = if (selected) TILE_SELECTED else TILE
+    val (color, tint) = trendColors(quote.change_pct)
+    Box(modifier = modifier.padding(2.dp)) {
+        Column(
+            modifier = GlanceModifier.fillMaxWidth()
+                .background(tileColor)
+                .cornerRadius(12.dp)
+                .padding(horizontal = 6.dp, vertical = 5.dp)
+                .clickable(actionRunCallback<SelectQuoteAction>(actionParametersOf(QUOTE_ID to quote.id))),
+        ) {
+            Text(quote.name, style = style(SUBTLE.copy(alpha = alpha), 10), maxLines = 1)
+            Text(formatPrice(quote.price), style = style(TEXT.copy(alpha = alpha), 14, bold = true), maxLines = 1)
+            Box(modifier = GlanceModifier.background(tint).cornerRadius(6.dp).padding(horizontal = 4.dp, vertical = 1.dp)) {
+                Text(formatChangeBadge(quote.change_pct), style = style(color.copy(alpha = alpha), 10, bold = true), maxLines = 1)
+            }
+            if (showSpark && quote.chart.size >= 2) {
+                val density = LocalContext.current.resources.displayMetrics.density
+                val sparkHeight = 18.dp
+                val bitmap = renderLine(
+                    values = quote.chart.takeLast(SPARK_POINTS),
+                    lineColor = color.toArgb(),
+                    backgroundColor = tileColor.toArgb(),
+                    widthPx = (tileWidth - 12.dp).toPx(density),
+                    heightPx = sparkHeight.toPx(density),
+                    strokePx = 1.5f * density,
+                    fill = false,
+                )
+                Spacer(GlanceModifier.height(4.dp))
+                Image(
+                    provider = ImageProvider(bitmap),
+                    contentDescription = null,
+                    contentScale = ContentScale.FillBounds,
+                    modifier = GlanceModifier.fillMaxWidth().height(sparkHeight),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChartPanel(quote: Quote, size: DpSize) {
+    val summary = chartSummary(quote.chart) ?: return
+    val (color, tint) = trendColors(summary.changePct)
+    val density = LocalContext.current.resources.displayMetrics.density
+    val chartWidth = size.width - 20.dp
+    val chartHeight = maxOf(56.dp, size.height - 250.dp)
+    // 전송 크기 제한 때문에 가로 픽셀 수를 줄이고 위젯이 늘려서 그리게 한다
+    val scale = min(1f, MAX_CHART_WIDTH_PX / (chartWidth.value * density))
+    val bitmap = renderLine(
+        values = quote.chart,
+        lineColor = color.toArgb(),
+        backgroundColor = BACKGROUND.toArgb(),
+        widthPx = (chartWidth.toPx(density) * scale).toInt(),
+        heightPx = (chartHeight.toPx(density) * scale).toInt(),
+        strokePx = 2f * density * scale,
+        fill = true,
+    )
+    Column(
+        modifier = GlanceModifier.fillMaxWidth()
+            .clickable(actionRunCallback<SelectQuoteAction>(actionParametersOf(QUOTE_ID to quote.id))),
+    ) {
+        Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(quote.name, style = style(TEXT, 13, bold = true))
+            Text("  3개월", style = style(SUBTLE, 10))
+            Spacer(GlanceModifier.defaultWeight())
+            Box(modifier = GlanceModifier.background(tint).cornerRadius(6.dp).padding(horizontal = 6.dp, vertical = 2.dp)) {
+                Text(formatChangeBadge(summary.changePct), style = style(color, 11, bold = true))
+            }
+        }
+        Text(
+            "최저 ${formatPrice(summary.min)}  ·  최고 ${formatPrice(summary.max)}  ·  누르면 닫기",
+            style = style(SUBTLE, 10),
+        )
+        Spacer(GlanceModifier.height(4.dp))
+        Image(
+            provider = ImageProvider(bitmap),
+            contentDescription = "${quote.name} 3개월 차트",
+            contentScale = ContentScale.FillBounds,
+            modifier = GlanceModifier.fillMaxWidth().height(chartHeight),
+        )
     }
 }
 
 @Composable
 private fun EventList(events: List<Event>, today: LocalDate) {
-    Text("다가오는 발표", style = style(SUBTLE, 10))
+    Text("다가오는 발표", style = style(SUBTLE, 10, bold = true))
+    Spacer(GlanceModifier.height(4.dp))
     if (events.isEmpty()) {
         Text("2주 안에 예정된 발표가 없습니다", style = style(SUBTLE, 12))
     }
     events.forEach { event ->
         val date = LocalDate.parse(event.date)
         val isToday = date == today
-        val prefix = if (isToday) "오늘 · " else ""
-        Text("$prefix${formatEventDate(date)} ${event.title}", style = style(TEXT, 12, bold = isToday), maxLines = 1)
-    }
-}
-
-@Composable
-private fun Footer(data: MarketData, now: ZonedDateTime) {
-    Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            formatUpdatedAt(OffsetDateTime.parse(data.updated_at), now),
-            style = style(SUBTLE, 10),
-            modifier = GlanceModifier.defaultWeight(),
-        )
-        Text("새로고침", style = style(DOWN, 11, bold = true))
+        Row(
+            modifier = GlanceModifier.fillMaxWidth().padding(vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = GlanceModifier.width(40.dp)
+                    .background(if (isToday) UP_TINT else TILE)
+                    .cornerRadius(6.dp)
+                    .padding(vertical = 2.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(formatDday(date, today), style = style(if (isToday) UP else TEXT, 10, bold = true))
+            }
+            Spacer(GlanceModifier.width(8.dp))
+            Text("${flagOf(event.country)} ${event.title}", style = style(TEXT, 12, bold = isToday), maxLines = 1)
+            Spacer(GlanceModifier.defaultWeight())
+            Text(formatEventDate(date), style = style(SUBTLE, 11))
+        }
     }
 }
