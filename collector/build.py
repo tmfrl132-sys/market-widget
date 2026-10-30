@@ -74,7 +74,7 @@ def main() -> None:
     else:
         data = build_data(now, prev)
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    args.out.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     log.info("%s 저장 (시세 %d, 일정 %d)", args.out, len(data["quotes"]), len(data["events"]))
 
 

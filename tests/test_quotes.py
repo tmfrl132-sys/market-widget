@@ -108,7 +108,7 @@ def test_fetch_quotes_includes_chart_closes():
     assert ks11["chart"] == [2600.0, 2610.0, 2622.5, 2630.1, 2637.82, 2650.12]
 
 
-def test_chart_url_requests_three_months():
+def test_requests_one_year_daily_and_five_year_weekly():
     urls = []
 
     def get(url, **kwargs):
@@ -116,7 +116,50 @@ def test_chart_url_requests_three_months():
         return FakeResponse(FIXTURE)
 
     quotes.fetch_quotes({}, get=get)
-    assert "range=3mo" in urls[0] and "interval=1d" in urls[0]
+    assert "range=1y" in urls[0] and "interval=1d" in urls[0]
+    assert "range=5y" in urls[1] and "interval=1wk" in urls[1]
+
+
+WEEKLY = {"chart": {"result": [{
+    "meta": {"regularMarketPrice": 2650.12},
+    "timestamp": [1, 2, 3],
+    "indicators": {"quote": [{"close": [2000.0, None, 2500.556]}]},
+}]}}
+
+
+def split_get(url, **kwargs):
+    return FakeResponse(WEEKLY if "interval=1wk" in url else FIXTURE)
+
+
+def test_fetch_quotes_includes_daily_and_weekly():
+    ks11 = next(q for q in quotes.fetch_quotes({}, get=split_get) if q["id"] == "KS11")
+    assert ks11["daily"] == [2600.0, 2610.0, 2622.5, 2630.1, 2637.82, 2650.12]
+    assert ks11["weekly"] == [2000.0, 2500.56]
+
+
+def test_chart_keeps_last_63_daily_for_old_app_versions():
+    payload = json.loads(json.dumps(FIXTURE))
+    payload["chart"]["result"][0]["indicators"]["quote"][0]["close"] = [float(i) for i in range(100)]
+    payload["chart"]["result"][0]["timestamp"] = list(range(100))
+
+    def get(url, **kwargs):
+        return FakeResponse(payload)
+
+    ks11 = next(q for q in quotes.fetch_quotes({}, get=get) if q["id"] == "KS11")
+    assert ks11["chart"] == [float(i) for i in range(37, 100)]
+
+
+def test_weekly_failure_keeps_previous_weekly_and_is_not_stale():
+    def get(url, **kwargs):
+        if "interval=1wk" in url:
+            raise requests.ConnectionError("down")
+        return FakeResponse(FIXTURE)
+
+    prev = {"KS11": {"id": "KS11", "weekly": [1.0, 2.0]}}
+    ks11 = next(q for q in quotes.fetch_quotes(prev, get=get) if q["id"] == "KS11")
+    assert ks11["weekly"] == [1.0, 2.0]
+    assert ks11["stale"] is False
+    assert ks11["daily"]
 
 
 def test_failed_symbol_without_previous_has_empty_chart():
