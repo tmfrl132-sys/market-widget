@@ -1,0 +1,19 @@
+# 파이썬
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 수집 결과 (Pages로 배포)
+site/
+
+# 안드로이드
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.jks
+*.p12
+
+# 작업 파일
+.superpowers/

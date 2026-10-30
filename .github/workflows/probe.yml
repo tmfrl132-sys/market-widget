@@ -1,0 +1,18 @@
+name: probe
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Yahoo
+        run: |
+          code=$(curl -s -o y.json -w "%{http_code}" -A "Mozilla/5.0" "https://query1.finance.yahoo.com/v8/finance/chart/%5EKS11?range=10d&interval=1d")
+          echo "HTTP $code"; head -c 300 y.json; echo
+          grep -q '"regularMarketPrice"' y.json && echo "YAHOO_OK"
+      - name: FRED
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        run: |
+          if [ -z "$FRED_API_KEY" ]; then echo "FRED_KEY_MISSING"; exit 0; fi
+          code=$(curl -s -o f.json -w "%{http_code}" "https://api.stlouisfed.org/fred/release/dates?release_id=10&api_key=$FRED_API_KEY&file_type=json&include_release_dates_with_no_data=true&sort_order=desc&limit=5")
+          echo "HTTP $code"; head -c 300 f.json; echo
