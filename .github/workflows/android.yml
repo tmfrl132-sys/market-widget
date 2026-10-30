@@ -7,6 +7,8 @@ on:
       - ".github/workflows/android.yml"
     tags: ["v*"]
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -22,4 +24,27 @@ jobs:
       - name: 단위 테스트
         run: gradle -p android testDebugUnitTest
       - name: 디버그 빌드
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         run: gradle -p android assembleDebug
+
+      # 태그(v*)를 push하면 서명된 APK를 Releases에 올린다
+      - name: 서명 키 풀기
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+        run: echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/market.p12"
+      - name: 서명된 릴리스 빌드
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          KEYSTORE_FILE: ${{ runner.temp }}/market.p12
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          VERSION_NAME: ${{ github.ref_name }}
+        run: |
+          gradle -p android assembleRelease
+          cp android/app/build/outputs/apk/release/app-release.apk "market-widget-${GITHUB_REF_NAME}.apk"
+      - name: Release에 올리기
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: market-widget-${{ github.ref_name }}.apk
