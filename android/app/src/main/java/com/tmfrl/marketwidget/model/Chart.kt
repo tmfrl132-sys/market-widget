@@ -67,13 +67,6 @@ fun chartSummary(values: List<Double>): ChartSummary? {
     return ChartSummary(values.min(), values.max(), change, change / values.first() * 100)
 }
 
-/** 등락 차이 문구. 값 자릿수는 formatPrice와 같다. */
-fun formatSignedAmount(change: Double): String = when {
-    change > 0 -> "+${formatPrice(change)}"
-    change < 0 -> "-${formatPrice(abs(change))}"
-    else -> formatPrice(0.0)
-}
-
 /** 같은 종목을 다시 누르면 선택을 푼다. */
 fun toggleSelection(current: String?, tapped: String): String? = if (current == tapped) null else tapped
 

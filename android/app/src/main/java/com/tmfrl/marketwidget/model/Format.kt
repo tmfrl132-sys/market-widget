@@ -27,6 +27,17 @@ fun formatPrice(price: Double?): String = when {
     else -> smallFormat.format(price)
 }
 
+/** 등락 차이 문구. 100 이상은 정수, 그 아래는 소수 둘째 자리. */
+fun formatSignedAmount(change: Double): String {
+    val size = kotlin.math.abs(change)
+    val digits = if (size >= 100) bigFormat.format(size) else smallFormat.format(size)
+    return when {
+        change > 0 -> "+$digits"
+        change < 0 -> "-$digits"
+        else -> digits
+    }
+}
+
 fun formatChangePct(pct: Double?): String = when {
     pct == null -> ""
     pct > 0 -> "+${smallFormat.format(pct)}%"
