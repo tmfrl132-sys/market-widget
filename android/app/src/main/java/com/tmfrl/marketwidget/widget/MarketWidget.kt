@@ -538,7 +538,7 @@ private fun EventList(events: List<Event>, today: LocalDate) {
     Text("다가오는 발표", style = style(SUBTLE, 10, bold = true))
     Spacer(GlanceModifier.height(4.dp))
     if (events.isEmpty()) {
-        Text("2주 안에 예정된 발표가 없습니다", style = style(SUBTLE, 12))
+        Text("한 달 안에 예정된 발표가 없습니다", style = style(SUBTLE, 12))
     }
     events.forEach { event ->
         val date = LocalDate.parse(event.date)

@@ -6,8 +6,10 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.PowerManager
 import android.os.SystemClock
 import com.tmfrl.marketwidget.data.Repository
+import com.tmfrl.marketwidget.model.keepTicking
 import com.tmfrl.marketwidget.model.refreshDue
 import com.tmfrl.marketwidget.widget.advanceAutoWidgets
 import kotlinx.coroutines.CoroutineScope
@@ -20,7 +22,7 @@ private const val INTERVAL_MS = 60_000L
 object AutoTick {
     /**
      * WorkManager는 최소 15분이라 1분 간격에 AlarmManager를 쓴다.
-     * 기기를 깨우지 않는 알람이라 화면이 꺼져 있으면 멈췄다가 켜질 때 이어진다.
+     * 기기를 깨우지 않는 알람이라 기기가 잠들면 쉬었다가 깨어날 때 이어진다.
      */
     fun schedule(context: Context) {
         val manager = context.getSystemService(AlarmManager::class.java)
@@ -41,16 +43,17 @@ object AutoTick {
 /** 알람이 울리면 다음 종목으로 넘긴다. 재부팅하면 알람이 사라지므로 다시 건다. */
 class AutoTickReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == Intent.ACTION_BOOT_COMPLETED) {
+        // 기기가 깨어 있어도 화면이 꺼져 있으면 넘기지도 받지도 않고 알람만 잇는다
+        val screenOff = !context.getSystemService(PowerManager::class.java).isInteractive
+        if (intent.action == Intent.ACTION_BOOT_COMPLETED || screenOff) {
             AutoTick.schedule(context)
             return
         }
         val pending = goAsync()
         CoroutineScope(Dispatchers.Default).launch {
             try {
-                if (advanceAutoWidgets(context)) {
+                if (keepTicking { advanceAutoWidgets(context) }) {
                     AutoTick.schedule(context)
-                    // 알람이 화면이 켜져 있을 때만 울리므로 시세도 그때만 받는다
                     val last = Repository.forContext(context).lastRefreshMillis()
                     if (refreshDue(System.currentTimeMillis(), last)) RefreshWorker.runOnce(context)
                 }

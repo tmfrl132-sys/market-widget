@@ -1,5 +1,7 @@
 package com.tmfrl.marketwidget.model
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -46,6 +48,25 @@ class AutoModeTest {
         assertEquals(false, refreshDue(nowMillis = 1_000_000, lastRefreshMillis = 1_000_000 - 240_000))
         assertEquals(true, refreshDue(nowMillis = 1_000_000, lastRefreshMillis = 1_000_000 - 295_000))
         assertEquals(true, refreshDue(nowMillis = 1_000_000, lastRefreshMillis = 0))
+    }
+
+    @Test fun keepTicking_followsResult() = runTest {
+        assertEquals(true, keepTicking { true })
+        assertEquals(false, keepTicking { false })
+    }
+
+    @Test fun keepTicking_continuesAfterError() = runTest {
+        assertEquals(true, keepTicking { throw IllegalStateException("glance") })
+    }
+
+    @Test fun keepTicking_doesNotSwallowCancellation() = runTest {
+        var cancelled = false
+        try {
+            keepTicking { throw CancellationException("stop") }
+        } catch (e: CancellationException) {
+            cancelled = true
+        }
+        assertEquals(true, cancelled)
     }
 
     @Test fun tap_jumpsInAutoAndTogglesOtherwise() {

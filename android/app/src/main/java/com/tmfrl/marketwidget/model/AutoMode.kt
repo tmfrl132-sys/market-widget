@@ -1,10 +1,21 @@
 package com.tmfrl.marketwidget.model
 
+import kotlinx.coroutines.CancellationException
+
 /** 자동모드에서 시세를 다시 받는 간격 5분. 알람이 몇 초 일찍 울려도 한 번 거르지 않게 조금 짧게 잡는다. */
 private const val AUTO_REFRESH_MS = 270_000L
 
 fun refreshDue(nowMillis: Long, lastRefreshMillis: Long): Boolean =
     nowMillis - lastRefreshMillis >= AUTO_REFRESH_MS
+
+/** 다음 알람을 걸지 정한다. 넘기다 오류가 나도 앱이 죽거나 자동모드가 끊기지 않게 다음 알람을 건다. */
+suspend fun keepTicking(advance: suspend () -> Boolean): Boolean = try {
+    advance()
+} catch (e: CancellationException) {
+    throw e
+} catch (e: Exception) {
+    true
+}
 
 /** 자동모드에서 돌아가며 보여줄 종목. 이 기간의 차트가 있는 종목만 고르고, 하나도 없으면 전부 쓴다. */
 fun autoQuoteIds(quotes: List<Quote>, period: Period): List<String> {

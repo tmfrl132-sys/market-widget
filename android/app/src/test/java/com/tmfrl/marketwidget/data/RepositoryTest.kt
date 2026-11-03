@@ -67,6 +67,15 @@ class RepositoryTest {
         assertEquals(95.0, repo.cached()!!.quotes[0].price!!, 0.0)
     }
 
+    @Test fun refresh_replaces_cache_without_leaving_temp_files() = runTest {
+        val cache = tmp.newFile("data.json").apply { writeText(sample("2026-10-30T10:00:00+09:00")) }
+        val repo = Repository(cache) { sample("2026-10-30T10:30:00+09:00") }
+        repo.refresh()
+        repo.refresh()
+        assertEquals("2026-10-30T10:30:00+09:00", repo.cached()?.updated_at)
+        assertEquals(listOf("data.json"), tmp.root.list()!!.toList())
+    }
+
     @Test fun cached_missing_file_is_null() {
         val repo = Repository(tmp.root.resolve("none.json")) { "" }
         assertNull(repo.cached())

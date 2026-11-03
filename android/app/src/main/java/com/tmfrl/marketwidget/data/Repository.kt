@@ -19,6 +19,8 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.time.OffsetDateTime
 
 const val DATA_URL = "https://tmfrl132-sys.github.io/market-widget/data.json"
@@ -46,8 +48,19 @@ class Repository(
             cached()
         }
         val data = base?.let { applyLiveQuotes(it, fetchLive(), now()) }
-        if (data != null) cacheFile.writeText(encodeMarketData(data))
+        if (data != null) writeCache(encodeMarketData(data))
         data
+    }
+
+    /** 위젯이 쓰다 만 파일을 읽지 않게 임시 파일에 다 쓴 뒤 한 번에 바꿔치기한다. */
+    private fun writeCache(text: String) {
+        val temp = File.createTempFile("data", ".tmp", cacheFile.parentFile)
+        try {
+            temp.writeText(text)
+            Files.move(temp.toPath(), cacheFile.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        } finally {
+            temp.delete()
+        }
     }
 
     /** 마지막으로 새로 받은 시각. 받은 적이 없으면 0. */
