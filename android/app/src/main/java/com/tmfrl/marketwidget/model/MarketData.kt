@@ -3,6 +3,7 @@
 package com.tmfrl.marketwidget.model
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 /** data.json 형식. 필드 이름은 수집기(collector/build.py)와 같다. */
