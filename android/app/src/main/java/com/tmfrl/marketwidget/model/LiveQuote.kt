@@ -20,7 +20,7 @@ val LIVE_SYMBOLS: Map<String, String> = mapOf(
     "BTC" to "BTC-USD",
 )
 
-data class LiveQuote(val price: Double, val change: Double, val changePct: Double)
+data class LiveQuote(val price: Double, val change: Double, val changePct: Double, val prevClose: Double)
 
 @Serializable
 private data class ChartResponse(val chart: ChartBody)
@@ -71,17 +71,33 @@ fun parseLiveQuote(text: String): LiveQuote? {
     val prevClose = if (sameDay) bars[bars.size - 2].second else bars.last().second
     if (prevClose == 0.0) return null
     val change = price - prevClose
-    return LiveQuote(price, round2(change), round2(change / prevClose * 100))
+    return LiveQuote(price, round2(change), round2(change / prevClose * 100), prevClose)
 }
 
-/** 직접 받은 시세를 덮어쓴다. 받지 못한 항목은 그대로 두고, 하나도 못 받았으면 갱신 시각도 그대로 둔다. */
+/** 일봉 끝을 현재값으로 맞춘다. 마지막 봉이 전일 종가면 오늘 봉이 아직 없는 것이라 덧붙이고, 아니면 바꾼다. */
+private fun withLatestDaily(closes: List<Double>, live: LiveQuote): List<Double> = when {
+    closes.isEmpty() -> closes
+    closes.last() == round2(live.prevClose) -> closes + round2(live.price)
+    else -> closes.dropLast(1) + round2(live.price)
+}
+
+/** 직접 받은 시세를 덮어쓰고 차트 끝도 맞춘다. 받지 못한 항목은 그대로 두고, 하나도 못 받았으면 갱신 시각도 그대로 둔다. */
 fun applyLiveQuotes(data: MarketData, live: Map<String, LiveQuote>, updatedAt: String): MarketData {
     if (live.isEmpty()) return data
     return data.copy(
         updated_at = updatedAt,
         quotes = data.quotes.map { quote ->
             live[quote.id]?.let {
-                quote.copy(price = it.price, change = it.change, change_pct = it.changePct, stale = false)
+                quote.copy(
+                    price = it.price,
+                    change = it.change,
+                    change_pct = it.changePct,
+                    chart = withLatestDaily(quote.chart, it),
+                    daily = withLatestDaily(quote.daily, it),
+                    // 주봉은 이번 주 봉이 항상 끝에 있어 바꾸기만 한다
+                    weekly = if (quote.weekly.isEmpty()) quote.weekly else quote.weekly.dropLast(1) + round2(it.price),
+                    stale = false,
+                )
             } ?: quote
         },
     )

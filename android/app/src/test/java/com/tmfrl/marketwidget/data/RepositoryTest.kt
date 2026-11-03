@@ -39,15 +39,15 @@ class RepositoryTest {
         """{"updated_at": "$time", "quotes": [{"id": "KS11", "name": "코스피", "price": 100.0,
            "change": 1.0, "change_pct": 1.0, "daily": [90.0, 100.0]}], "events": []}"""
 
-    private val live = mapOf("KS11" to LiveQuote(95.0, -5.0, -5.0))
+    private val live = mapOf("KS11" to LiveQuote(95.0, -5.0, -5.0, 100.0))
 
-    @Test fun refresh_overlays_live_quotes_and_keeps_chart() = runTest {
+    @Test fun refresh_overlays_live_quotes_on_price_and_chart() = runTest {
         val cache = tmp.root.resolve("data.json")
         val repo = Repository(cache, { live }, { "2026-10-30T10:45:00+09:00" }) { withQuote("2026-10-30T10:00:00+09:00") }
         val data = repo.refresh()!!
         assertEquals("2026-10-30T10:45:00+09:00", data.updated_at)
         assertEquals(95.0, data.quotes[0].price!!, 0.0)
-        assertEquals(listOf(90.0, 100.0), data.quotes[0].daily)
+        assertEquals(listOf(90.0, 100.0, 95.0), data.quotes[0].daily)
         assertEquals(data, repo.cached())
     }
 

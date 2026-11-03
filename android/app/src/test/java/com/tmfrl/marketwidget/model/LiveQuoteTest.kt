@@ -27,6 +27,7 @@ class LiveQuoteTest {
         assertEquals(95.0, live.price, 0.0)
         assertEquals(-5.0, live.change, 0.0)
         assertEquals(-5.0, live.changePct, 0.0)
+        assertEquals(100.0, live.prevClose, 0.0)
     }
 
     @Test fun parse_usesLastBarWhenTodayBarIsEmpty() {
@@ -46,15 +47,38 @@ class LiveQuoteTest {
         assertNull(parseLiveQuote("""{"chart": {"result": null, "error": {"code": "Not Found"}}}"""))
     }
 
-    @Test fun apply_overwritesReceivedAndKeepsOthersAndCharts() {
+    @Test fun apply_overwritesReceivedAndKeepsOthers() {
         val data = MarketData("old", listOf(quote("KS11", 100.0, stale = true), quote("BTC", 50.0)), emptyList())
-        val merged = applyLiveQuotes(data, mapOf("KS11" to LiveQuote(95.0, -5.0, -5.0)), "new")
+        val merged = applyLiveQuotes(data, mapOf("KS11" to LiveQuote(95.0, -5.0, -5.0, 100.0)), "new")
         assertEquals("new", merged.updated_at)
         assertEquals(95.0, merged.quotes[0].price!!, 0.0)
         assertEquals(-5.0, merged.quotes[0].change_pct!!, 0.0)
         assertFalse(merged.quotes[0].stale)
-        assertEquals(listOf(1.0, 2.0), merged.quotes[0].daily)
         assertEquals(data.quotes[1], merged.quotes[1])
+    }
+
+    private fun applied(daily: List<Double>, weekly: List<Double>, live: LiveQuote): Quote {
+        val base = Quote("KS11", "코스피", 100.0, 1.0, 0.1, chart = daily, daily = daily, weekly = weekly)
+        return applyLiveQuotes(MarketData("old", listOf(base), emptyList()), mapOf("KS11" to live), "new").quotes[0]
+    }
+
+    @Test fun apply_replacesTodayBarWithLivePrice() {
+        val quote = applied(listOf(90.0, 100.0, 98.0), listOf(80.0, 98.0), LiveQuote(95.126, -4.87, -4.87, 100.0))
+        assertEquals(listOf(90.0, 100.0, 95.13), quote.daily)
+        assertEquals(listOf(90.0, 100.0, 95.13), quote.chart)
+        assertEquals(listOf(80.0, 95.13), quote.weekly)
+    }
+
+    @Test fun apply_appendsWhenLastBarIsPreviousClose() {
+        val quote = applied(listOf(90.0, 100.0), listOf(80.0, 100.0), LiveQuote(95.0, -5.0, -5.0, 100.0))
+        assertEquals(listOf(90.0, 100.0, 95.0), quote.daily)
+        assertEquals(listOf(80.0, 95.0), quote.weekly)
+    }
+
+    @Test fun apply_leavesMissingChartsEmpty() {
+        val quote = applied(emptyList(), emptyList(), LiveQuote(95.0, -5.0, -5.0, 100.0))
+        assertEquals(emptyList<Double>(), quote.daily)
+        assertEquals(emptyList<Double>(), quote.weekly)
     }
 
     @Test fun apply_nothingReceivedKeepsData() {

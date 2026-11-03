@@ -59,6 +59,7 @@ import com.tmfrl.marketwidget.model.formatChangeBadge
 import com.tmfrl.marketwidget.model.formatDday
 import com.tmfrl.marketwidget.model.formatEventDate
 import com.tmfrl.marketwidget.model.formatPrice
+import com.tmfrl.marketwidget.model.formatSignedAmount
 import com.tmfrl.marketwidget.model.formatUpdatedAt
 import com.tmfrl.marketwidget.model.seoulToday
 import com.tmfrl.marketwidget.model.autoQuoteIds
@@ -379,6 +380,8 @@ private fun ChartPanel(quote: Quote, period: Period, auto: Boolean, width: Dp, h
         heightPx = bh,
         strokePx = 2.5f * density * scale,
         detailed = true,
+        textPx = 11f * density * scale,
+        textColor = SUBTLE.toArgb(),
     )
     // 차트나 머리줄을 누르면 닫는다. 기간 선택 줄은 따로 눌린다.
     val close = actionRunCallback<SelectQuoteAction>(actionParametersOf(QUOTE_ID to quote.id))
@@ -391,7 +394,10 @@ private fun ChartPanel(quote: Quote, period: Period, auto: Boolean, width: Dp, h
             Text("  ${period.label}", style = style(SUBTLE, 10))
             Spacer(GlanceModifier.defaultWeight())
             Box(modifier = GlanceModifier.background(tint).cornerRadius(6.dp).padding(horizontal = 6.dp, vertical = 2.dp)) {
-                Text(formatChangeBadge(summary.changePct), style = style(color, 11, bold = true))
+                Text(
+                    "${formatChangeBadge(summary.changePct)} (${formatSignedAmount(summary.change)})",
+                    style = style(color, 11, bold = true),
+                )
             }
         }
         Text(

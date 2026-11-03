@@ -24,11 +24,56 @@ class ChartTest {
         assertEquals(emptyList<Pair<Float, Float>>(), chartPoints(listOf(1.0), 100f, 50f, 0f))
     }
 
+    @Test fun chartPoints_usesAxisRangeWhenGiven() {
+        val axis = YAxis(0.0, 100.0, listOf(0.0, 100.0))
+        val points = chartPoints(listOf(25.0, 50.0), width = 100f, height = 100f, pad = 0f, axis = axis)
+        assertEquals(listOf(0f to 75f, 100f to 50f), points)
+    }
+
+    @Test fun yAxis_roundTicksCoverValues() {
+        val axis = yAxisFor(listOf(5859.08, 5700.0, 5648.79))!!
+        assertEquals(listOf(5600.0, 5700.0, 5800.0, 5900.0), axis.ticks)
+        assertEquals(5600.0, axis.min, 0.0)
+        assertEquals(5900.0, axis.max, 0.0)
+    }
+
+    @Test fun yAxis_smallValuesKeepCleanFractions() {
+        assertEquals(listOf(4.0, 4.25, 4.5, 4.75, 5.0), yAxisFor(listOf(4.2, 4.9))!!.ticks)
+    }
+
+    @Test fun yAxis_flatSeriesGetsRange() {
+        assertEquals(listOf(99.0, 100.0, 101.0), yAxisFor(listOf(100.0, 100.0))!!.ticks)
+    }
+
+    @Test fun yAxis_alwaysThreeToFiveTicksAroundValues() {
+        val samples = listOf(
+            listOf(0.8, 1.3), listOf(20.8, 31.5), listOf(1325.5, 1401.0),
+            listOf(61000.0, 124000.0), listOf(3969.6, 4210.0), listOf(5000.0, 5650.0),
+        )
+        samples.forEach { values ->
+            val axis = yAxisFor(values)!!
+            assertEquals("$values ${axis.ticks}", true, axis.ticks.size in 3..5)
+            assertEquals("$values ${axis.ticks}", true, axis.min <= values.min() && axis.max >= values.max())
+        }
+    }
+
+    @Test fun yAxis_nullWithoutValues() {
+        assertNull(yAxisFor(emptyList()))
+    }
+
     @Test fun chartSummary_minMaxAndPeriodChange() {
         val summary = chartSummary(listOf(100.0, 90.0, 120.0, 110.0))!!
         assertEquals(90.0, summary.min, 0.0)
         assertEquals(120.0, summary.max, 0.0)
+        assertEquals(10.0, summary.change, 1e-9)
         assertEquals(10.0, summary.changePct, 1e-9)
+    }
+
+    @Test fun formatSignedAmount_signAndDigits() {
+        assertEquals("-211", formatSignedAmount(-210.5))
+        assertEquals("+1,250", formatSignedAmount(1250.0))
+        assertEquals("-0.42", formatSignedAmount(-0.42))
+        assertEquals("0.00", formatSignedAmount(0.0))
     }
 
     @Test fun chartSummary_nullForTooFewValues() {

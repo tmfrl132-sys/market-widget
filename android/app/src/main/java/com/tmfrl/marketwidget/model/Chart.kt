@@ -3,26 +3,75 @@ package com.tmfrl.marketwidget.model
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 import kotlin.math.abs
+import kotlin.math.ceil
+import kotlin.math.floor
+import kotlin.math.log10
+import kotlin.math.pow
+import kotlin.math.round
 
-/** 값 목록을 width×height 영역의 좌표로 바꾼다. 위가 큰 값이다. 값이 2개 미만이면 빈 목록. */
-fun chartPoints(values: List<Double>, width: Float, height: Float, pad: Float): List<Pair<Float, Float>> {
-    if (values.size < 2) return emptyList()
-    val min = values.min()
-    val max = values.max()
-    val span = max - min
-    val stepX = (width - 2 * pad) / (values.size - 1)
-    return values.mapIndexed { i, v ->
-        val y = if (span == 0.0) height / 2 else (pad + (max - v) / span * (height - 2 * pad)).toFloat()
-        (pad + i * stepX) to y
+/** 세로축 범위와 눈금. 눈금이 범위 양 끝에 놓인다. */
+data class YAxis(val min: Double, val max: Double, val ticks: List<Double>)
+
+/** 값 범위를 덮는 딱 떨어지는 눈금 3~5개를 고른다. 간격은 1, 2, 2.5, 5, 10의 10배수다. */
+fun yAxisFor(values: List<Double>): YAxis? {
+    if (values.isEmpty()) return null
+    var low = values.min()
+    var high = values.max()
+    if (low == high) {
+        val margin = if (low == 0.0) 1.0 else abs(low) * 0.01
+        low -= margin
+        high += margin
     }
+    val rough = (high - low) / 3
+    val magnitude = 10.0.pow(floor(log10(rough)))
+    val step = magnitude * when {
+        rough / magnitude <= 1 -> 1.0
+        rough / magnitude <= 2 -> 2.0
+        rough / magnitude <= 2.5 -> 2.5
+        rough / magnitude <= 5 -> 5.0
+        else -> 10.0
+    }
+    val first = floor(low / step).toInt()
+    val last = ceil(high / step).toInt()
+    // 곱셈 오차로 4.250000001 같은 값이 나오지 않게 다듬는다
+    val ticks = (first..last).map { round(it * step * 1e6) / 1e6 }
+    return YAxis(ticks.first(), ticks.last(), ticks)
 }
 
-data class ChartSummary(val min: Double, val max: Double, val changePct: Double)
+/** 값의 세로 좌표. 위가 큰 값이다. */
+fun yPosition(value: Double, min: Double, max: Double, height: Float, pad: Float): Float {
+    val span = max - min
+    return if (span == 0.0) height / 2 else (pad + (max - value) / span * (height - 2 * pad)).toFloat()
+}
 
-/** 차트 기간의 최저·최고와 처음 대비 마지막 등락률. */
+/**
+ * 값 목록을 width×height 영역의 좌표로 바꾼다. 위가 큰 값이다. 값이 2개 미만이면 빈 목록.
+ * axis가 있으면 그 범위로, 없으면 값의 최저~최고로 맞춘다.
+ */
+fun chartPoints(
+    values: List<Double>, width: Float, height: Float, pad: Float, axis: YAxis? = null,
+): List<Pair<Float, Float>> {
+    if (values.size < 2) return emptyList()
+    val min = axis?.min ?: values.min()
+    val max = axis?.max ?: values.max()
+    val stepX = (width - 2 * pad) / (values.size - 1)
+    return values.mapIndexed { i, v -> (pad + i * stepX) to yPosition(v, min, max, height, pad) }
+}
+
+data class ChartSummary(val min: Double, val max: Double, val change: Double, val changePct: Double)
+
+/** 차트 기간의 최저·최고와 처음 대비 마지막 차이·등락률. */
 fun chartSummary(values: List<Double>): ChartSummary? {
     if (values.size < 2) return null
-    return ChartSummary(values.min(), values.max(), (values.last() - values.first()) / values.first() * 100)
+    val change = values.last() - values.first()
+    return ChartSummary(values.min(), values.max(), change, change / values.first() * 100)
+}
+
+/** 등락 차이 문구. 값 자릿수는 formatPrice와 같다. */
+fun formatSignedAmount(change: Double): String = when {
+    change > 0 -> "+${formatPrice(change)}"
+    change < 0 -> "-${formatPrice(abs(change))}"
+    else -> formatPrice(0.0)
 }
 
 /** 같은 종목을 다시 누르면 선택을 푼다. */
