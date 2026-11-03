@@ -7,9 +7,11 @@ import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Shader
+import com.tmfrl.marketwidget.model.LabelBox
 import com.tmfrl.marketwidget.model.YAxis
 import com.tmfrl.marketwidget.model.chartPoints
 import com.tmfrl.marketwidget.model.formatPrice
+import com.tmfrl.marketwidget.model.stackLabels
 import com.tmfrl.marketwidget.model.yAxisFor
 import com.tmfrl.marketwidget.model.yPosition
 
@@ -19,7 +21,8 @@ import com.tmfrl.marketwidget.model.yPosition
  * detailed는 큰 차트용: 오른쪽 세로축 숫자와 눈금선, 기준값 점선, 영역 채우기, 마지막 값 점.
  * 아래 인자는 detailed일 때만 쓴다.
  * baseline은 점선 값(없으면 점선 없음), baselineLabel은 점선 문구, axisLabel은 세로축 숫자 형식,
- * areaBase는 영역을 채울 기준값(없으면 차트 바닥까지), fixedAxis는 정해 둔 세로축(없으면 값으로 계산).
+ * areaBase는 영역을 채울 기준값(없으면 차트 바닥까지), fixedAxis는 정해 둔 세로축(없으면 값으로 계산),
+ * marks는 점에 붙일 문구(값 목록 위치와 문구).
  */
 fun renderLine(
     values: List<Double>,
@@ -36,6 +39,7 @@ fun renderLine(
     axisLabel: (Double) -> String = ::formatPrice,
     areaBase: Double? = null,
     fixedAxis: YAxis? = null,
+    marks: List<Pair<Int, String>> = emptyList(),
 ): Bitmap {
     val w = widthPx.coerceAtLeast(2)
     val h = heightPx.coerceAtLeast(2)
@@ -98,8 +102,33 @@ fun renderLine(
         if (axis != null && baseline != null) {
             drawBaselineLabel(canvas, baselineLabel, baseline, values.last(), axis, text, backgroundColor, plotW, h.toFloat(), pad)
         }
+        drawMarks(canvas, marks.filter { (i, _) -> i in points.indices }, points, text, backgroundColor, plotW, strokePx)
     }
     return bitmap
+}
+
+/** 사건 표시. 점을 찍고 그 위에 문구를 둔다. 문구끼리 겹치면 위로 올린다. */
+private fun drawMarks(
+    canvas: Canvas, marks: List<Pair<Int, String>>, points: List<Pair<Float, Float>>, text: Paint,
+    backgroundColor: Int, plotW: Float, strokePx: Float,
+) {
+    val size = text.textSize
+    val rowHeight = size * 1.3f
+    val boxes = marks.map { (i, label) ->
+        val (x, y) = points[i]
+        val width = text.measureText(label)
+        LabelBox((x - width / 2).coerceIn(0f, (plotW - width).coerceAtLeast(0f)), (y - rowHeight - strokePx * 2).coerceAtLeast(0f), width)
+    }
+    val tops = stackLabels(boxes, rowHeight)
+    val background = Paint().apply { color = backgroundColor }
+    val dot = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = text.color }
+    marks.forEachIndexed { n, (i, label) ->
+        val (x, y) = points[i]
+        val box = boxes[n]
+        canvas.drawCircle(x, y, strokePx * 1.4f, dot)
+        canvas.drawRect(box.left - size * 0.2f, tops[n], box.left + box.width + size * 0.2f, tops[n] + rowHeight, background)
+        canvas.drawText(label, box.left, tops[n] + size, text)
+    }
 }
 
 /** 눈금선과 오른쪽 숫자. */

@@ -6,6 +6,10 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
+/** 낙폭 차트의 사건 표시. index는 max_drawdowns 안의 위치, depth는 그 지점의 낙폭 %. */
+@Serializable
+data class MaxEvent(val label: String, val index: Int, val depth: Double)
+
 /** data.json 형식. 필드 이름은 수집기(collector/build.py)와 같다. */
 @Serializable
 data class Quote(
@@ -20,6 +24,7 @@ data class Quote(
     val weekly: List<Double> = emptyList(), // 5년 주봉 종가
     val max_closes: List<Double> = emptyList(), // 전체 기간 종가 (점을 줄임)
     val max_drawdowns: List<Double> = emptyList(), // 전체 기간 고점 대비 낙폭 %
+    val max_events: List<MaxEvent> = emptyList(), // 낙폭 차트에 표시할 사건
     val max_start: Int? = null, // 전체 기간 시작 연도
     val peak: Double? = null, // 전체 기간 최고 종가. 낙폭을 안 쓰는 지표는 null
     val mdd: Double? = null, // 전체 기간 최대 낙폭 %. 낙폭을 안 쓰는 지표는 null

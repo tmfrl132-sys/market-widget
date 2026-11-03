@@ -456,6 +456,7 @@ private fun ChartPanel(
             val drawdownBitmap = detailBitmap(
                 quote.max_drawdowns, DOWN, fullW, drawdownHeight.toPx(density), MAX_CHART_PIXELS * 4 / 10, density,
                 null, "", ::formatAxisPct, 0.0,
+                marks = quote.max_events.map { it.index to "${it.label} ${formatDrawdown(it.depth)}" },
             )
             Image(
                 provider = ImageProvider(drawdownBitmap),
@@ -478,6 +479,7 @@ private fun ChartPanel(
 private fun detailBitmap(
     values: List<Double>, color: Color, fullW: Int, fullH: Int, maxPixels: Int, density: Float,
     baseline: Double?, baselineLabel: String, axisLabel: (Double) -> String, areaBase: Double?, fixedAxis: YAxis? = null,
+    marks: List<Pair<Int, String>> = emptyList(),
 ): Bitmap {
     val (bw, bh) = fitBitmap(fullW, fullH, maxPixels)
     val scale = bw.toFloat() / fullW
@@ -496,6 +498,7 @@ private fun detailBitmap(
         axisLabel = axisLabel,
         areaBase = areaBase,
         fixedAxis = fixedAxis,
+        marks = marks,
     )
 }
 

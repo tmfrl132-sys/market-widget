@@ -30,6 +30,21 @@ class ChartTest {
         assertEquals(listOf(0f to 75f, 100f to 50f), points)
     }
 
+    @Test fun stackLabels_keepsSeparateBoxes() {
+        val boxes = listOf(LabelBox(0f, 50f, 40f), LabelBox(100f, 50f, 40f))
+        assertEquals(listOf(50f, 50f), stackLabels(boxes, height = 10f))
+    }
+
+    @Test fun stackLabels_movesOverlappingBoxUp() {
+        val boxes = listOf(LabelBox(0f, 50f, 40f), LabelBox(20f, 50f, 40f), LabelBox(30f, 45f, 40f))
+        assertEquals(listOf(50f, 40f, 25f), stackLabels(boxes, height = 10f))
+    }
+
+    @Test fun stackLabels_stopsAtTop() {
+        val boxes = listOf(LabelBox(0f, 5f, 40f), LabelBox(0f, 5f, 40f))
+        assertEquals(listOf(5f, 0f), stackLabels(boxes, height = 10f))
+    }
+
     @Test fun yAxis_roundTicksCoverValues() {
         val axis = yAxisFor(listOf(5859.08, 5700.0, 5648.79))!!
         assertEquals(listOf(5600.0, 5700.0, 5800.0, 5900.0), axis.ticks)

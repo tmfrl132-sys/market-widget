@@ -7,7 +7,8 @@ from urllib.parse import quote
 
 import requests
 
-from collector.config import HTTP_TIMEOUT, MAX_POINTS, NO_DRAWDOWN, RETRIES, SYMBOLS
+from collector.config import (EVENT_MIN_DEPTH, HTTP_TIMEOUT, MARKET_EVENTS, MAX_POINTS, NO_DRAWDOWN,
+                              RETRIES, SYMBOLS)
 
 log = logging.getLogger(__name__)
 
@@ -78,18 +79,35 @@ def thin_closes(closes: list[float]) -> list[float]:
     return points
 
 
-def max_fields(payload: dict, with_drawdown: bool) -> dict:
+def event_marks(id_: str, dates: list, depths: list[float], size: int) -> list[dict]:
+    """낙폭 차트에 표시할 사건. index는 max_drawdowns 안의 위치다."""
+    marks = []
+    for label, start, end, symbols in MARKET_EVENTS:
+        if id_ not in symbols:
+            continue
+        window = [i for i, d in enumerate(dates) if start <= d.isoformat() <= end]
+        if not window:
+            continue
+        deepest = min(window, key=lambda i: depths[i])
+        if depths[deepest] <= EVENT_MIN_DEPTH:
+            marks.append({"label": label, "index": deepest // size, "depth": round(depths[deepest], 1)})
+    return marks
+
+
+def max_fields(payload: dict, with_drawdown: bool, id_: str = "") -> dict:
     """전체 기간 차트와 고점·MDD. 낙폭은 일봉 전체로 계산하고 차트 점만 줄인다."""
     result = payload["chart"]["result"][0]
     bars = [(ts, c) for ts, c in zip(result["timestamp"], result["indicators"]["quote"][0]["close"])
             if c is not None]
     closes = [c for _, c in bars]
+    offset = result["meta"].get("gmtoffset", 0)
     size = _bucket_size(len(closes))
     chunks = range(0, len(closes), size)
     fields = {
         "max_closes": [round(c, 2) for c in thin_closes(closes)],
         "max_drawdowns": [],
-        "max_start": _local_date(bars[0][0], result["meta"].get("gmtoffset", 0)).year,
+        "max_events": [],
+        "max_start": _local_date(bars[0][0], offset).year,
         "peak": None,
         "mdd": None,
     }
@@ -97,6 +115,7 @@ def max_fields(payload: dict, with_drawdown: bool) -> dict:
         depths = drawdowns(closes)
         # 묶음의 가장 깊은 값을 써서 MDD 바닥이 차트에서 사라지지 않게 한다
         fields["max_drawdowns"] = [round(min(depths[i:i + size]), 1) for i in chunks]
+        fields["max_events"] = event_marks(id_, [_local_date(ts, offset) for ts, _ in bars], depths, size)
         fields["peak"] = round(max(closes), 2)
         fields["mdd"] = round(min(depths), 1)
     return fields
@@ -131,12 +150,13 @@ def _fetch_max(id_: str, symbol: str, get, prev_item: dict) -> dict:
     """전체 기간. 실패해도 시세는 살리고 직전 값을 그대로 쓴다."""
     try:
         url = MAX_URL.format(symbol=quote(symbol), now=int(time.time()))
-        return max_fields(_get_json(url, get), id_ not in NO_DRAWDOWN)
+        return max_fields(_get_json(url, get), id_ not in NO_DRAWDOWN, id_)
     except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as e:
         log.warning("%s 전체 기간 실패: %s", symbol, e)
         return {
             "max_closes": prev_item.get("max_closes", []),
             "max_drawdowns": prev_item.get("max_drawdowns", []),
+            "max_events": prev_item.get("max_events", []),
             "max_start": prev_item.get("max_start"),
             "peak": prev_item.get("peak"),
             "mdd": prev_item.get("mdd"),
@@ -172,5 +192,5 @@ def fetch_quotes(prev: dict[str, dict], get=requests.get) -> list[dict]:
                 items.append({"id": id_, "name": name, "price": None, "change": None,
                               "change_pct": None, "history": [], "chart": [],
                               "daily": [], "weekly": [], "max_closes": [], "max_drawdowns": [],
-                              "max_start": None, "peak": None, "mdd": None, "stale": True})
+                              "max_events": [], "max_start": None, "peak": None, "mdd": None, "stale": True})
     return items

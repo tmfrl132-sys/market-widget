@@ -20,6 +20,19 @@ NO_DRAWDOWN = {"KRW", "TNX", "VIX"}
 # 전체 기간 차트에 보내는 최대 점 수
 MAX_POINTS = 500
 
+STOCKS = {"KS11", "KQ11", "GSPC", "IXIC"}
+
+# 낙폭 차트에 표시할 사건: (이름, 시작일, 끝일, 표시할 지표). 구간 안의 가장 깊은 지점에 붙인다.
+MARKET_EVENTS: list[tuple[str, str, str, set[str]]] = [
+    ("외환위기", "1997-07-01", "1999-01-31", {"KS11"}),
+    ("닷컴버블", "2000-03-01", "2003-03-31", STOCKS),
+    ("서브프라임", "2007-10-01", "2009-06-30", STOCKS | {"CL", "GC"}),
+    ("코로나", "2020-02-01", "2020-04-30", STOCKS | {"CL", "GC", "BTC"}),
+]
+
+# 낙폭이 이보다 얕으면 사건을 표시하지 않는다
+EVENT_MIN_DEPTH = -15.0
+
 # FRED release_id -> 일정 제목
 FRED_RELEASES: dict[int, str] = {
     10: "미국 CPI",

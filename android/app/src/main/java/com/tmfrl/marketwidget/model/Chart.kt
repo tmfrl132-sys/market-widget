@@ -9,6 +9,23 @@ import kotlin.math.log10
 import kotlin.math.pow
 import kotlin.math.round
 
+/** 차트 위 글자 칸. 왼쪽, 위, 너비. */
+data class LabelBox(val left: Float, val top: Float, val width: Float)
+
+/** 글자 칸이 겹치면 앞 칸들을 피해 위로 올린다. 돌려주는 값은 칸별 위쪽 좌표이고 0 위로는 올리지 않는다. */
+fun stackLabels(boxes: List<LabelBox>, height: Float): List<Float> {
+    val placed = mutableListOf<LabelBox>()
+    return boxes.map { box ->
+        var top = box.top
+        while (top > 0 && placed.any { box.left < it.left + it.width && it.left < box.left + box.width && abs(it.top - top) < height }) {
+            top -= height
+        }
+        val settled = top.coerceAtLeast(0f)
+        placed += box.copy(top = settled)
+        settled
+    }
+}
+
 /** 세로축 범위와 눈금. 눈금이 범위 양 끝에 놓인다. */
 data class YAxis(val min: Double, val max: Double, val ticks: List<Double>)
 

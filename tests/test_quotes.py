@@ -1,4 +1,5 @@
 import json
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -219,6 +220,39 @@ def test_thin_closes_keeps_peak_trough_first_and_last():
     assert points[-1] == 55.0
     assert 9114.0 in points and 11.0 in points
     assert points.index(9114.0) < points.index(11.0)
+
+
+def test_event_marks_at_deepest_point_in_window():
+    dates = [date(2020, 1, 15), date(2020, 2, 20), date(2020, 3, 23), date(2020, 4, 20), date(2020, 6, 1)]
+    depths = [0.0, -10.0, -34.04, -20.0, -50.0]
+    assert quotes.event_marks("GSPC", dates, depths, size=1) == [
+        {"label": "코로나", "index": 2, "depth": -34.0}]
+
+
+def test_event_marks_skips_shallow_drop():
+    dates = [date(2020, 2, 20), date(2020, 3, 23)]
+    assert quotes.event_marks("GSPC", dates, [-5.0, -14.9], size=1) == []
+
+
+def test_event_marks_only_for_listed_symbols_and_covered_dates():
+    dates = [date(1998, 6, 16)]
+    assert quotes.event_marks("KS11", dates, [-64.7], size=1)[0]["label"] == "외환위기"
+    assert quotes.event_marks("GSPC", dates, [-64.7], size=1) == []
+    assert quotes.event_marks("KS11", [date(2015, 1, 1)], [-64.7], size=1) == []
+
+
+def test_event_marks_index_follows_thinned_series():
+    dates = [date(2020, 1, 1) + timedelta(days=i) for i in range(120)]
+    depths = [0.0] * 120
+    depths[70] = -30.0  # 2020-03-11
+    assert quotes.event_marks("GSPC", dates, depths, size=7)[0]["index"] == 10
+
+
+def test_max_fields_includes_events_only_with_drawdown():
+    start = 1584921600  # 2020-03-23 00:00 UTC
+    with_events = quotes.max_fields(max_payload([100.0, 50.0], start=start), True, "GSPC")
+    assert with_events["max_events"][0]["label"] == "코로나"
+    assert quotes.max_fields(max_payload([100.0, 50.0], start=start), False, "KRW")["max_events"] == []
 
 
 def test_thin_closes_short_series_unchanged():
