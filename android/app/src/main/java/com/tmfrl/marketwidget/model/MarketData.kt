@@ -30,3 +30,5 @@ data class MarketData(val updated_at: String, val quotes: List<Quote>, val event
 private val json = Json { ignoreUnknownKeys = true }
 
 fun parseMarketData(text: String): MarketData = json.decodeFromString(text)
+
+fun encodeMarketData(data: MarketData): String = json.encodeToString(data)

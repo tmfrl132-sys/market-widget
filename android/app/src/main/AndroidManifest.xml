@@ -2,6 +2,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- 자동모드 1분 알람. 안드로이드 13부터는 USE_EXACT_ALARM, 12는 SCHEDULE_EXACT_ALARM이 허용한다 -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission
+        android:name="android.permission.SCHEDULE_EXACT_ALARM"
+        android:maxSdkVersion="32" />
 
     <application android:label="@string/app_name">
         <activity
@@ -22,6 +28,14 @@
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/market_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".work.AutoTickReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
         </receiver>
     </application>
 </manifest>

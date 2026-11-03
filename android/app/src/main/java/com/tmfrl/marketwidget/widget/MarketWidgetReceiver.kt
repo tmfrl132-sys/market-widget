@@ -6,6 +6,7 @@ import androidx.glance.GlanceId
 import androidx.glance.action.ActionParameters
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import androidx.glance.appwidget.action.ActionCallback
+import com.tmfrl.marketwidget.work.AutoTick
 import com.tmfrl.marketwidget.work.RefreshWorker
 
 class MarketWidgetReceiver : GlanceAppWidgetReceiver() {
@@ -17,11 +18,12 @@ class MarketWidgetReceiver : GlanceAppWidgetReceiver() {
         RefreshWorker.runOnce(context)
     }
 
-    // 앱 업데이트 뒤에도 불린다. 새 버전이 기대하는 형식으로 바로 다시 받고, 주기 작업도 되살린다.
+    // 앱 업데이트 뒤에도 불린다. 새 버전이 기대하는 형식으로 바로 다시 받고, 주기 작업과 자동모드 알람도 되살린다.
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
         super.onUpdate(context, appWidgetManager, appWidgetIds)
         RefreshWorker.schedule(context)
         RefreshWorker.runOnce(context)
+        AutoTick.schedule(context)
     }
 }
 

@@ -8,7 +8,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.glance.GlanceId
@@ -59,8 +61,11 @@ import com.tmfrl.marketwidget.model.formatEventDate
 import com.tmfrl.marketwidget.model.formatPrice
 import com.tmfrl.marketwidget.model.formatUpdatedAt
 import com.tmfrl.marketwidget.model.seoulToday
-import com.tmfrl.marketwidget.model.toggleSelection
+import com.tmfrl.marketwidget.model.autoQuoteIds
+import com.tmfrl.marketwidget.model.nextAutoQuote
+import com.tmfrl.marketwidget.model.selectionAfterTap
 import com.tmfrl.marketwidget.model.trendOf
+import com.tmfrl.marketwidget.work.AutoTick
 import com.tmfrl.marketwidget.model.upcomingEvents
 import java.time.LocalDate
 import java.time.OffsetDateTime
@@ -108,6 +113,14 @@ private val QUOTE_ID = ActionParameters.Key<String>("quote_id")
 private val PERIOD = stringPreferencesKey("period")
 private val PERIOD_NAME = ActionParameters.Key<String>("period_name")
 
+/** 자동모드 여부와, 끌 때 되돌아갈 켜기 전 선택. 위젯마다 따로 기억한다. */
+private val AUTO = booleanPreferencesKey("auto")
+private val SAVED_SELECTED = stringPreferencesKey("saved_selected")
+
+private fun MutablePreferences.setSelected(id: String?) {
+    if (id == null) remove(SELECTED) else this[SELECTED] = id
+}
+
 class MarketWidget : GlanceAppWidget() {
     // 실제 크기로 그려야 위젯을 늘린 만큼 차트·일정 칸이 커진다
     override val sizeMode = SizeMode.Exact
@@ -118,7 +131,9 @@ class MarketWidget : GlanceAppWidget() {
             // 상태를 읽어 두면 DATA_VERSION·SELECTED·PERIOD가 바뀔 때마다 다시 그리면서 캐시를 새로 읽는다
             val state = currentState<Preferences>()
             state[DATA_VERSION]
-            WidgetContent(repository.cached(), ZonedDateTime.now(), state[SELECTED], parsePeriod(state[PERIOD]))
+            WidgetContent(
+                repository.cached(), ZonedDateTime.now(), state[SELECTED], parsePeriod(state[PERIOD]), state[AUTO] == true,
+            )
         }
     }
 }
@@ -141,18 +156,64 @@ suspend fun redrawAllWidgets(context: Context) {
     MarketWidget().updateAll(context)
 }
 
-/** 시세 타일을 누르면 그 종목 차트를 보여주고, 다시 누르면 일정으로 돌아간다. */
+/**
+ * 시세 타일을 누르면 그 종목 차트를 보여주고, 다시 누르면 일정으로 돌아간다.
+ * 자동모드에서는 그 종목으로 건너뛰고, 거기서 1분을 새로 센다.
+ */
 class SelectQuoteAction : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
         val tapped = parameters[QUOTE_ID] ?: return
+        var auto = false
         updateAppWidgetState(context, glanceId) { prefs ->
-            when (val next = toggleSelection(prefs[SELECTED], tapped)) {
-                null -> prefs.remove(SELECTED)
-                else -> prefs[SELECTED] = next
+            auto = prefs[AUTO] == true
+            prefs.setSelected(selectionAfterTap(prefs[SELECTED], tapped, auto))
+        }
+        MarketWidget().update(context, glanceId)
+        if (auto) AutoTick.schedule(context)
+    }
+}
+
+/** 자동 버튼. 켜면 첫 종목부터 돌고, 끄면 켜기 전 화면으로 돌아간다. */
+class ToggleAutoAction : ActionCallback {
+    override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
+        val quotes = Repository.forContext(context).cached()?.quotes.orEmpty()
+        updateAppWidgetState(context, glanceId) { prefs ->
+            if (prefs[AUTO] == true) {
+                prefs.remove(AUTO)
+                prefs.setSelected(prefs[SAVED_SELECTED])
+                prefs.remove(SAVED_SELECTED)
+            } else {
+                prefs[AUTO] = true
+                prefs[SELECTED]?.let { prefs[SAVED_SELECTED] = it }
+                val first = nextAutoQuote(null, autoQuoteIds(quotes, parsePeriod(prefs[PERIOD])))
+                prefs.setSelected(first)
             }
         }
         MarketWidget().update(context, glanceId)
+        // 끈 경우에도 걸어 둔다. 자동모드인 위젯이 없으면 다음 알람에서 멈춘다.
+        AutoTick.schedule(context)
     }
+}
+
+/** 자동모드인 위젯을 다음 종목으로 넘긴다. 자동모드인 위젯이 있었는지 돌려준다. */
+suspend fun advanceAutoWidgets(context: Context): Boolean {
+    val quotes = Repository.forContext(context).cached()?.quotes.orEmpty()
+    var any = false
+    GlanceAppWidgetManager(context).getGlanceIds(MarketWidget::class.java).forEach { id ->
+        var auto = false
+        updateAppWidgetState(context, id) { prefs ->
+            auto = prefs[AUTO] == true
+            if (auto) {
+                val next = nextAutoQuote(prefs[SELECTED], autoQuoteIds(quotes, parsePeriod(prefs[PERIOD])))
+                if (next != null) prefs[SELECTED] = next
+            }
+        }
+        if (auto) {
+            any = true
+            MarketWidget().update(context, id)
+        }
+    }
+    return any
 }
 
 private fun style(color: Color, size: Int, bold: Boolean = false) = TextStyle(
@@ -170,7 +231,7 @@ private fun trendColors(pct: Double?): Pair<Color, Color> = when (trendOf(pct)) 
 private fun Dp.toPx(density: Float) = (value * density).toInt()
 
 @Composable
-private fun WidgetContent(data: MarketData?, now: ZonedDateTime, selected: String?, period: Period) {
+private fun WidgetContent(data: MarketData?, now: ZonedDateTime, selected: String?, period: Period, auto: Boolean) {
     val size = LocalSize.current
     val large = size.height >= DETAIL_MIN_HEIGHT
     Column(
@@ -179,7 +240,7 @@ private fun WidgetContent(data: MarketData?, now: ZonedDateTime, selected: Strin
             .cornerRadius(20.dp)
             .padding(10.dp),
     ) {
-        Header(data, now)
+        Header(data, now, auto)
         Spacer(GlanceModifier.height(6.dp))
         if (data == null) {
             Text(
@@ -188,14 +249,14 @@ private fun WidgetContent(data: MarketData?, now: ZonedDateTime, selected: Strin
                 modifier = GlanceModifier.clickable(actionRunCallback<RefreshAction>()),
             )
         } else {
-            QuotesAndDetail(data, now, selected, period, size, large, GlanceModifier.defaultWeight())
+            QuotesAndDetail(data, now, selected, period, auto, size, large, GlanceModifier.defaultWeight())
         }
     }
 }
 
 @Composable
 private fun QuotesAndDetail(
-    data: MarketData, now: ZonedDateTime, selected: String?, period: Period, size: DpSize, large: Boolean,
+    data: MarketData, now: ZonedDateTime, selected: String?, period: Period, auto: Boolean, size: DpSize, large: Boolean,
     modifier: GlanceModifier,
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
@@ -213,7 +274,7 @@ private fun QuotesAndDetail(
             val detailHeight = maxOf(60.dp, size.height - TOP_PART_HEIGHT)
             val chosen = data.quotes.firstOrNull { it.id == selected }
             if (chosen != null && chartValues(chosen, period).size >= 2) {
-                ChartPanel(chosen, period, size.width - 20.dp, detailHeight, GlanceModifier.defaultWeight())
+                ChartPanel(chosen, period, auto, size.width - 20.dp, detailHeight, GlanceModifier.defaultWeight())
             } else if (chosen != null) {
                 // 앱 업데이트 직후처럼 기기에 저장된 data.json이 차트 데이터 없는 옛 형식일 때
                 Text(
@@ -231,12 +292,21 @@ private fun QuotesAndDetail(
 }
 
 @Composable
-private fun Header(data: MarketData?, now: ZonedDateTime) {
+private fun Header(data: MarketData?, now: ZonedDateTime, auto: Boolean) {
     Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text("경제지표", style = style(TEXT, 13, bold = true))
         Spacer(GlanceModifier.defaultWeight())
         if (data != null) {
             Text(formatUpdatedAt(OffsetDateTime.parse(data.updated_at), now), style = style(SUBTLE, 10))
+        }
+        Spacer(GlanceModifier.width(8.dp))
+        Box(
+            modifier = GlanceModifier.background(if (auto) DOWN else TILE)
+                .cornerRadius(6.dp)
+                .padding(horizontal = 6.dp, vertical = 1.dp)
+                .clickable(actionRunCallback<ToggleAutoAction>()),
+        ) {
+            Text("자동", style = style(if (auto) TEXT else SUBTLE, 11, bold = auto))
         }
         Box(
             modifier = GlanceModifier.padding(start = 8.dp, end = 2.dp)
@@ -290,7 +360,7 @@ private fun QuoteTile(quote: Quote, selected: Boolean, showSpark: Boolean, tileW
 }
 
 @Composable
-private fun ChartPanel(quote: Quote, period: Period, width: Dp, height: Dp, modifier: GlanceModifier) {
+private fun ChartPanel(quote: Quote, period: Period, auto: Boolean, width: Dp, height: Dp, modifier: GlanceModifier) {
     val values = chartValues(quote, period)
     val summary = chartSummary(values) ?: return
     val (color, tint) = trendColors(summary.changePct)
@@ -325,7 +395,7 @@ private fun ChartPanel(quote: Quote, period: Period, width: Dp, height: Dp, modi
             }
         }
         Text(
-            "최저 ${formatPrice(summary.min)}  ·  최고 ${formatPrice(summary.max)}  ·  누르면 닫기",
+            "최저 ${formatPrice(summary.min)}  ·  최고 ${formatPrice(summary.max)}" + if (auto) "" else "  ·  누르면 닫기",
             style = style(SUBTLE, 10),
         )
         Spacer(GlanceModifier.height(4.dp))

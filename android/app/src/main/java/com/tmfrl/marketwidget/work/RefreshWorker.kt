@@ -14,7 +14,7 @@ import com.tmfrl.marketwidget.data.Repository
 import com.tmfrl.marketwidget.widget.redrawAllWidgets
 import java.util.concurrent.TimeUnit
 
-/** 30분마다 data.json을 받아 위젯을 다시 그린다. */
+/** 30분마다 data.json과 현재 시세를 받아 위젯을 다시 그린다. */
 class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
