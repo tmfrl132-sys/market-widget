@@ -41,6 +41,13 @@ class AutoModeTest {
         assertEquals(listOf("KS11", "BTC"), autoQuoteIds(quotes, Period.ONE_YEAR))
     }
 
+    @Test fun refreshDue_everyFiveMinutesWithSomeTolerance() {
+        assertEquals(false, refreshDue(nowMillis = 1_000_000, lastRefreshMillis = 1_000_000 - 60_000))
+        assertEquals(false, refreshDue(nowMillis = 1_000_000, lastRefreshMillis = 1_000_000 - 240_000))
+        assertEquals(true, refreshDue(nowMillis = 1_000_000, lastRefreshMillis = 1_000_000 - 295_000))
+        assertEquals(true, refreshDue(nowMillis = 1_000_000, lastRefreshMillis = 0))
+    }
+
     @Test fun tap_jumpsInAutoAndTogglesOtherwise() {
         assertEquals("KS11", selectionAfterTap("KS11", "KS11", auto = true))
         assertEquals("BTC", selectionAfterTap("KS11", "BTC", auto = true))

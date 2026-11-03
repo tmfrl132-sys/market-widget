@@ -1,6 +1,7 @@
 package com.tmfrl.marketwidget.widget
 
 import android.content.Context
+import android.graphics.Bitmap
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
@@ -55,8 +56,11 @@ import com.tmfrl.marketwidget.model.Quote
 import com.tmfrl.marketwidget.model.Trend
 import com.tmfrl.marketwidget.model.chartSummary
 import com.tmfrl.marketwidget.model.flagOf
+import com.tmfrl.marketwidget.model.drawdownSummary
+import com.tmfrl.marketwidget.model.formatAxisPct
 import com.tmfrl.marketwidget.model.formatChangeBadge
 import com.tmfrl.marketwidget.model.formatDday
+import com.tmfrl.marketwidget.model.formatDrawdown
 import com.tmfrl.marketwidget.model.formatEventDate
 import com.tmfrl.marketwidget.model.formatPrice
 import com.tmfrl.marketwidget.model.formatSignedAmount
@@ -88,6 +92,9 @@ private val EVENT_ROW_HEIGHT = 24.dp
 
 /** 차트 비트맵 픽셀 상한. RGB_565라 약 500KB. */
 private const val MAX_CHART_PIXELS = 250_000
+
+/** 이 높이보다 낮으면 MAX에서 낙폭 차트를 빼고 가격 차트만 보여준다. */
+private val MIN_STACKED_HEIGHT = 140.dp
 
 // 어두운 카드 디자인. 상승 빨강·하락 파랑은 어두운 배경에서 잘 보이게 밝게 잡았다.
 private val BACKGROUND = Color(0xFF111827)
@@ -283,6 +290,8 @@ private fun QuotesAndDetail(
                     style = style(SUBTLE, 12),
                     modifier = GlanceModifier.clickable(actionRunCallback<RefreshAction>()),
                 )
+                // 고른 기간의 데이터가 없어도 다른 기간으로 옮길 수 있게 둔다
+                PeriodSelector(period)
             } else {
                 val today = seoulToday(now)
                 val rows = eventRows(detailHeight.value - 20f, EVENT_ROW_HEIGHT.value, min = 3)
@@ -364,24 +373,25 @@ private fun QuoteTile(quote: Quote, selected: Boolean, showSpark: Boolean, tileW
 private fun ChartPanel(quote: Quote, period: Period, auto: Boolean, width: Dp, height: Dp, modifier: GlanceModifier) {
     val values = chartValues(quote, period)
     val summary = chartSummary(values) ?: return
-    val (color, tint) = trendColors(summary.changePct)
+    // 오늘 차트는 전일 종가가 기준이고, 나머지는 기간 첫 값이 기준이다
+    val today = period == Period.TODAY
+    val change = if (today) quote.change ?: summary.change else summary.change
+    val changePct = if (today) quote.change_pct ?: summary.changePct else summary.changePct
+    val baseline = if (today) quote.prev_close ?: values.first() else values.first()
+    val (color, tint) = trendColors(changePct)
     val density = LocalContext.current.resources.displayMetrics.density
-    // 차트 그림 높이 = 칸 높이 - 위 두 줄(이름·최저최고) - 아래 두 줄(기간 표시, 기간 선택)
-    val imageHeight = maxOf(40.dp, height - 84.dp)
-    // 전송 크기 제한 때문에 픽셀 수를 줄이고 위젯이 늘려서 그리게 한다
+    val drawdown = drawdownSummary(quote, period)
+    // 차트 그림 높이 = 칸 높이 - 위 두 줄(이름·최저최고) - 낙폭 줄 - 아래 두 줄(기간 표시, 기간 선택)
+    val imagesHeight = maxOf(40.dp, height - (if (drawdown != null) 100.dp else 84.dp))
+    val showDrawdownChart = period == Period.MAX && quote.max_drawdowns.size >= 2 && imagesHeight >= MIN_STACKED_HEIGHT
+    val drawdownHeight = imagesHeight * 0.4f
+    val priceHeight = if (showDrawdownChart) imagesHeight - drawdownHeight else imagesHeight
     val fullW = width.toPx(density)
-    val (bw, bh) = fitBitmap(fullW, imageHeight.toPx(density), MAX_CHART_PIXELS)
-    val scale = bw.toFloat() / fullW
-    val bitmap = renderLine(
-        values = values,
-        lineColor = color.toArgb(),
-        backgroundColor = BACKGROUND.toArgb(),
-        widthPx = bw,
-        heightPx = bh,
-        strokePx = 2.5f * density * scale,
-        detailed = true,
-        textPx = 11f * density * scale,
-        textColor = SUBTLE.toArgb(),
+    // 두 그림을 합쳐도 전송 크기 제한을 넘지 않게 픽셀을 나눠 쓴다
+    val bitmap = detailBitmap(
+        values, color, fullW, priceHeight.toPx(density),
+        if (showDrawdownChart) MAX_CHART_PIXELS * 6 / 10 else MAX_CHART_PIXELS, density,
+        baseline, if (today) "전일" else "시작", ::formatPrice, null,
     )
     // 차트나 머리줄을 누르면 닫는다. 기간 선택 줄은 따로 눌린다.
     val close = actionRunCallback<SelectQuoteAction>(actionParametersOf(QUOTE_ID to quote.id))
@@ -395,7 +405,7 @@ private fun ChartPanel(quote: Quote, period: Period, auto: Boolean, width: Dp, h
             Spacer(GlanceModifier.defaultWeight())
             Box(modifier = GlanceModifier.background(tint).cornerRadius(6.dp).padding(horizontal = 6.dp, vertical = 2.dp)) {
                 Text(
-                    "${formatChangeBadge(summary.changePct)} (${formatSignedAmount(summary.change)})",
+                    "${formatChangeBadge(changePct)} (${formatSignedAmount(change)})",
                     style = style(color, 11, bold = true),
                 )
             }
@@ -404,6 +414,12 @@ private fun ChartPanel(quote: Quote, period: Period, auto: Boolean, width: Dp, h
             "최저 ${formatPrice(summary.min)}  ·  최고 ${formatPrice(summary.max)}" + if (auto) "" else "  ·  누르면 닫기",
             style = style(SUBTLE, 10),
         )
+        if (drawdown != null) {
+            Text(
+                "고점 대비 ${formatDrawdown(drawdown.current)}  ·  MDD ${formatDrawdown(drawdown.mdd)}",
+                style = style(TEXT, 11, bold = true),
+            )
+        }
         Spacer(GlanceModifier.height(4.dp))
         Image(
             provider = ImageProvider(bitmap),
@@ -411,13 +427,51 @@ private fun ChartPanel(quote: Quote, period: Period, auto: Boolean, width: Dp, h
             contentScale = ContentScale.FillBounds,
             modifier = GlanceModifier.fillMaxWidth().defaultWeight().clickable(close),
         )
+        if (showDrawdownChart) {
+            // 가격과 낙폭은 눈금이 달라 한 차트에 겹치지 않고 위아래로 놓는다. 시간축은 같다.
+            val drawdownBitmap = detailBitmap(
+                quote.max_drawdowns, DOWN, fullW, drawdownHeight.toPx(density), MAX_CHART_PIXELS * 4 / 10, density,
+                null, "", ::formatAxisPct, 0.0,
+            )
+            Image(
+                provider = ImageProvider(drawdownBitmap),
+                contentDescription = "${quote.name} 고점 대비 낙폭 차트",
+                contentScale = ContentScale.FillBounds,
+                modifier = GlanceModifier.fillMaxWidth().height(drawdownHeight).clickable(close),
+            )
+        }
         Row(modifier = GlanceModifier.fillMaxWidth().padding(top = 2.dp)) {
-            Text(period.agoLabel, style = style(SUBTLE, 10))
+            val startLabel = if (period == Period.MAX && quote.max_start != null) "${quote.max_start}년~" else period.agoLabel
+            Text(startLabel, style = style(SUBTLE, 10))
             Spacer(GlanceModifier.defaultWeight())
             Text("현재 ${formatPrice(quote.price)}", style = style(color, 10, bold = true))
         }
         PeriodSelector(period)
     }
+}
+
+/** 큰 차트 비트맵. 전송 크기 제한 때문에 픽셀 수를 줄이고 위젯이 늘려서 그리게 하므로 선과 글자도 같은 비율로 줄인다. */
+private fun detailBitmap(
+    values: List<Double>, color: Color, fullW: Int, fullH: Int, maxPixels: Int, density: Float,
+    baseline: Double?, baselineName: String, axisLabel: (Double) -> String, areaBase: Double?,
+): Bitmap {
+    val (bw, bh) = fitBitmap(fullW, fullH, maxPixels)
+    val scale = bw.toFloat() / fullW
+    return renderLine(
+        values = values,
+        lineColor = color.toArgb(),
+        backgroundColor = BACKGROUND.toArgb(),
+        widthPx = bw,
+        heightPx = bh,
+        strokePx = 2.5f * density * scale,
+        detailed = true,
+        textPx = 11f * density * scale,
+        textColor = SUBTLE.toArgb(),
+        baseline = baseline,
+        baselineName = baselineName,
+        axisLabel = axisLabel,
+        areaBase = areaBase,
+    )
 }
 
 /** 차트 아래 라디오 버튼 줄. 누르면 바로 그 기간으로 바뀐다. */

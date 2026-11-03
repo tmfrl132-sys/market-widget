@@ -75,6 +75,59 @@ class LiveQuoteTest {
         assertEquals(listOf(80.0, 95.0), quote.weekly)
     }
 
+    private fun withMax(peak: Double?, mdd: Double?) = Quote(
+        "KS11", "코스피", 100.0, 1.0, 0.1,
+        max_closes = listOf(50.0, 100.0), max_drawdowns = if (peak == null) emptyList() else listOf(-60.0, -20.0),
+        peak = peak, mdd = mdd,
+    )
+
+    private fun merged(base: Quote, live: LiveQuote) =
+        applyLiveQuotes(MarketData("old", listOf(base), emptyList()), mapOf("KS11" to live), "new").quotes[0]
+
+    @Test fun apply_updatesMaxChartAndDrawdown() {
+        val quote = merged(withMax(peak = 200.0, mdd = -60.0), LiveQuote(90.0, -10.0, -10.0, 100.0))
+        assertEquals(listOf(50.0, 90.0), quote.max_closes)
+        assertEquals(listOf(-60.0, -55.0), quote.max_drawdowns)
+        assertEquals(200.0, quote.peak!!, 0.0)
+        assertEquals(-60.0, quote.mdd!!, 0.0)
+    }
+
+    @Test fun apply_newLowDeepensMdd() {
+        val quote = merged(withMax(peak = 200.0, mdd = -60.0), LiveQuote(40.0, -60.0, -60.0, 100.0))
+        assertEquals(-80.0, quote.mdd!!, 0.0)
+    }
+
+    @Test fun apply_newHighRaisesPeak() {
+        val quote = merged(withMax(peak = 200.0, mdd = -60.0), LiveQuote(250.0, 150.0, 150.0, 100.0))
+        assertEquals(250.0, quote.peak!!, 0.0)
+        assertEquals(listOf(-60.0, 0.0), quote.max_drawdowns)
+    }
+
+    @Test fun apply_keepsDrawdownEmptyForExcludedSymbols() {
+        val quote = merged(withMax(peak = null, mdd = null), LiveQuote(90.0, -10.0, -10.0, 100.0))
+        assertNull(quote.peak)
+        assertNull(quote.mdd)
+        assertEquals(emptyList<Double>(), quote.max_drawdowns)
+        assertEquals(listOf(50.0, 90.0), quote.max_closes)
+    }
+
+    @Test fun apply_setsIntradayEndingAtPriceAndPrevClose() {
+        val live = LiveQuote(95.0, -5.0, -5.0, 100.123, intraday = listOf(99.0, 97.0, 96.0))
+        val quote = merged(withMax(peak = 200.0, mdd = -60.0), live)
+        assertEquals(listOf(99.0, 97.0, 95.0), quote.intraday)
+        assertEquals(100.12, quote.prev_close!!, 0.0)
+    }
+
+    @Test fun apply_keepsOldIntradayWhenNoneReceived() {
+        val base = withMax(peak = 200.0, mdd = -60.0).copy(intraday = listOf(1.0, 2.0))
+        assertEquals(listOf(1.0, 2.0), merged(base, LiveQuote(95.0, -5.0, -5.0, 100.0)).intraday)
+    }
+
+    @Test fun parseIntraday_dropsEmptyBars() {
+        assertEquals(listOf(99.0, 97.13), parseIntraday(chart("97.0", day2, listOf(day1, day2, day2 + 300), "[99.0, null, 97.126]")))
+        assertEquals(emptyList<Double>(), parseIntraday("""{"chart": {"result": null}}"""))
+    }
+
     @Test fun apply_leavesMissingChartsEmpty() {
         val quote = applied(emptyList(), emptyList(), LiveQuote(95.0, -5.0, -5.0, 100.0))
         assertEquals(emptyList<Double>(), quote.daily)

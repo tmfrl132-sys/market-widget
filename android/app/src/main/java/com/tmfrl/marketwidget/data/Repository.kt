@@ -6,6 +6,7 @@ import com.tmfrl.marketwidget.model.LiveQuote
 import com.tmfrl.marketwidget.model.MarketData
 import com.tmfrl.marketwidget.model.applyLiveQuotes
 import com.tmfrl.marketwidget.model.encodeMarketData
+import com.tmfrl.marketwidget.model.parseIntraday
 import com.tmfrl.marketwidget.model.parseLiveQuote
 import com.tmfrl.marketwidget.model.parseMarketData
 import kotlinx.coroutines.Dispatchers
@@ -22,6 +23,7 @@ import java.time.OffsetDateTime
 
 const val DATA_URL = "https://tmfrl132-sys.github.io/market-widget/data.json"
 private const val YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/%s?range=5d&interval=1d"
+private const val INTRADAY_URL = "https://query1.finance.yahoo.com/v8/finance/chart/%s?range=1d&interval=5m"
 private const val TIMEOUT_MS = 10_000
 
 /**
@@ -48,6 +50,9 @@ class Repository(
         data
     }
 
+    /** 마지막으로 새로 받은 시각. 받은 적이 없으면 0. */
+    fun lastRefreshMillis(): Long = cacheFile.lastModified()
+
     fun cached(): MarketData? = try {
         if (cacheFile.exists()) parseMarketData(cacheFile.readText()) else null
     } catch (e: IllegalArgumentException) {
@@ -63,8 +68,10 @@ class Repository(
             LIVE_SYMBOLS.map { (id, symbol) ->
                 async(Dispatchers.IO) {
                     try {
-                        val url = YAHOO_URL.format(URLEncoder.encode(symbol, "UTF-8"))
-                        parseLiveQuote(httpGet(url))?.let { id to it }
+                        val encoded = URLEncoder.encode(symbol, "UTF-8")
+                        parseLiveQuote(httpGet(YAHOO_URL.format(encoded)))?.let {
+                            id to it.copy(intraday = fetchIntraday(encoded))
+                        }
                     } catch (e: IOException) {
                         null
                     } catch (e: IllegalArgumentException) {
@@ -72,6 +79,15 @@ class Repository(
                     }
                 }
             }.awaitAll().filterNotNull().toMap()
+        }
+
+        /** 오늘 차트용 5분봉. 실패해도 시세는 살린다. */
+        private fun fetchIntraday(encodedSymbol: String): List<Double> = try {
+            parseIntraday(httpGet(INTRADAY_URL.format(encodedSymbol)))
+        } catch (e: IOException) {
+            emptyList()
+        } catch (e: IllegalArgumentException) {
+            emptyList()
         }
 
         private fun httpGet(url: String): String {

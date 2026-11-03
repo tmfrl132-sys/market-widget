@@ -162,6 +162,87 @@ def test_weekly_failure_keeps_previous_weekly_and_is_not_stale():
     assert ks11["daily"]
 
 
+def max_payload(closes, start=1793232000, day=86400):
+    return {"chart": {"result": [{
+        "meta": {"gmtoffset": 32400},
+        "timestamp": [start + i * day for i in range(len(closes))],
+        "indicators": {"quote": [{"close": closes}]},
+    }]}}
+
+
+def test_drawdowns_from_running_peak():
+    assert quotes.drawdowns([100.0, 50.0, 200.0, 150.0]) == [0.0, -50.0, 0.0, -25.0]
+
+
+def test_drawdowns_negative_price_stops_at_minus_100():
+    assert quotes.drawdowns([100.0, -37.63, 50.0]) == [0.0, -100.0, -50.0]
+
+
+def test_max_fields_peak_and_mdd():
+    fields = quotes.max_fields(max_payload([100.0, None, 40.0, 200.0, 150.0]), with_drawdown=True)
+    assert fields["max_closes"] == [100.0, 40.0, 200.0, 150.0]
+    assert fields["max_drawdowns"] == [0.0, -60.0, 0.0, -25.0]
+    assert fields["peak"] == 200.0
+    assert fields["mdd"] == -60.0
+    assert fields["max_start"] == 2026
+
+
+def test_max_fields_without_drawdown_keeps_price_only():
+    fields = quotes.max_fields(max_payload([100.0, 40.0]), with_drawdown=False)
+    assert fields["max_closes"] == [100.0, 40.0]
+    assert fields["max_drawdowns"] == []
+    assert fields["peak"] is None
+    assert fields["mdd"] is None
+
+
+def test_max_fields_thins_points_but_keeps_trough_and_last():
+    closes = [100.0] * 1500
+    closes[700] = 20.0
+    closes[-1] = 90.0
+    fields = quotes.max_fields(max_payload(closes), with_drawdown=True)
+    assert len(fields["max_closes"]) == 500
+    assert len(fields["max_drawdowns"]) == 500
+    assert min(fields["max_drawdowns"]) == -80.0
+    assert fields["mdd"] == -80.0
+    assert fields["max_closes"][-1] == 90.0
+
+
+def test_requests_full_history_with_explicit_dates():
+    urls = []
+
+    def get(url, **kwargs):
+        urls.append(url)
+        return FakeResponse(FIXTURE)
+
+    quotes.fetch_quotes({}, get=get)
+    assert "period1=0" in urls[2] and "interval=1d" in urls[2]
+    assert "range=" not in urls[2]
+
+
+def test_no_drawdown_symbols_have_no_mdd():
+    result = {q["id"]: q for q in quotes.fetch_quotes({}, get=ok_get)}
+    for id_ in ("KRW", "TNX", "VIX"):
+        assert result[id_]["mdd"] is None
+        assert result[id_]["max_drawdowns"] == []
+        assert result[id_]["max_closes"]
+    assert result["KS11"]["mdd"] is not None
+
+
+def test_max_failure_keeps_previous_and_is_not_stale():
+    def get(url, **kwargs):
+        if "period1=" in url:
+            raise requests.ConnectionError("down")
+        return FakeResponse(FIXTURE)
+
+    prev = {"KS11": {"id": "KS11", "max_closes": [1.0, 2.0], "max_drawdowns": [0.0, -5.0],
+                     "max_start": 1996, "peak": 2.0, "mdd": -5.0}}
+    ks11 = next(q for q in quotes.fetch_quotes(prev, get=get) if q["id"] == "KS11")
+    assert ks11["max_closes"] == [1.0, 2.0]
+    assert ks11["mdd"] == -5.0
+    assert ks11["max_start"] == 1996
+    assert ks11["stale"] is False
+
+
 def test_failed_symbol_without_previous_has_empty_chart():
     def failing_get(url, **kwargs):
         raise requests.ConnectionError("down")

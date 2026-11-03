@@ -21,7 +21,24 @@ class PeriodTest {
     }
 
     @Test fun period_labels() {
-        assertEquals(listOf("1개월", "3개월", "1년", "5년"), Period.entries.map { it.label })
+        assertEquals(listOf("오늘", "1개월", "3개월", "1년", "5년", "MAX"), Period.entries.map { it.label })
         assertEquals("1년 전", Period.ONE_YEAR.agoLabel)
+    }
+
+    @Test fun chartValues_todayUsesIntradayAndMaxUsesFullHistory() {
+        val quote = Quote(
+            "KS11", "코스피", 1.0, 0.0, 0.0, daily = daily, weekly = weekly,
+            intraday = listOf(1.0, 2.0), max_closes = listOf(3.0, 4.0),
+        )
+        assertEquals(listOf(1.0, 2.0), chartValues(quote, Period.TODAY))
+        assertEquals(listOf(3.0, 4.0), chartValues(quote, Period.MAX))
+        assertEquals(daily, chartValues(quote, Period.ONE_YEAR))
+    }
+
+    @Test fun chartValues_oldCacheHasNoTodayOrMax() {
+        val quote = Quote("KS11", "코스피", 1.0, 0.0, 0.0, chart = listOf(1.0, 2.0))
+        assertEquals(emptyList<Double>(), chartValues(quote, Period.TODAY))
+        assertEquals(emptyList<Double>(), chartValues(quote, Period.MAX))
+        assertEquals(listOf(1.0, 2.0), chartValues(quote, Period.THREE_MONTHS))
     }
 }

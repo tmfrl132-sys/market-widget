@@ -14,6 +14,12 @@ SYMBOLS: list[tuple[str, str, str]] = [
     ("BTC", "비트코인", "BTC-USD"),
 ]
 
+# 낙폭이 투자 손실을 뜻하지 않는 지표. 고점 대비 낙폭과 MDD를 만들지 않는다.
+NO_DRAWDOWN = {"KRW", "TNX", "VIX"}
+
+# 전체 기간 차트에 보내는 최대 점 수
+MAX_POINTS = 500
+
 # FRED release_id -> 일정 제목
 FRED_RELEASES: dict[int, str] = {
     10: "미국 CPI",

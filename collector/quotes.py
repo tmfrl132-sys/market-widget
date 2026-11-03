@@ -7,11 +7,13 @@ from urllib.parse import quote
 
 import requests
 
-from collector.config import HTTP_TIMEOUT, RETRIES, SYMBOLS
+from collector.config import HTTP_TIMEOUT, MAX_POINTS, NO_DRAWDOWN, RETRIES, SYMBOLS
 
 log = logging.getLogger(__name__)
 
 CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range={range}&interval={interval}"
+# range=max는 간격을 3개월까지 멋대로 늘리고, 주봉·월봉에는 잘못된 값이 섞여 있어 날짜를 지정해 일봉을 받는다
+MAX_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?period1=0&period2={now}&interval=1d"
 OLD_APP_CHART_POINTS = 63  # v0.3.0 이하 앱이 읽는 chart(3개월)
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
@@ -45,8 +47,45 @@ def _local_date(ts: int, offset: int):
     return datetime.fromtimestamp(ts + offset, timezone.utc).date()
 
 
+def drawdowns(closes: list[float]) -> list[float]:
+    """날마다 그때까지의 고점 대비 낙폭(%). 마이너스 유가 때문에 -100 아래는 -100으로 막는다."""
+    peak = closes[0]
+    result = []
+    for close in closes:
+        peak = max(peak, close)
+        result.append(max(-100.0, (close / peak - 1) * 100) if peak > 0 else 0.0)
+    return result
+
+
+def max_fields(payload: dict, with_drawdown: bool) -> dict:
+    """전체 기간 차트와 고점·MDD. 낙폭은 일봉 전체로 계산하고 차트 점만 줄인다."""
+    result = payload["chart"]["result"][0]
+    bars = [(ts, c) for ts, c in zip(result["timestamp"], result["indicators"]["quote"][0]["close"])
+            if c is not None]
+    closes = [c for _, c in bars]
+    # 묶음의 가격은 마지막 값, 낙폭은 가장 깊은 값을 써서 MDD 바닥이 차트에서 사라지지 않게 한다
+    size = -(-len(closes) // MAX_POINTS)
+    chunks = range(0, len(closes), size)
+    fields = {
+        "max_closes": [round(closes[min(i + size, len(closes)) - 1], 2) for i in chunks],
+        "max_drawdowns": [],
+        "max_start": _local_date(bars[0][0], result["meta"].get("gmtoffset", 0)).year,
+        "peak": None,
+        "mdd": None,
+    }
+    if with_drawdown:
+        depths = drawdowns(closes)
+        fields["max_drawdowns"] = [round(min(depths[i:i + size]), 1) for i in chunks]
+        fields["peak"] = round(max(closes), 2)
+        fields["mdd"] = round(min(depths), 1)
+    return fields
+
+
 def _get_chart(symbol: str, get, range_: str = "1y", interval: str = "1d") -> dict:
-    url = CHART_URL.format(symbol=quote(symbol), range=range_, interval=interval)
+    return _get_json(CHART_URL.format(symbol=quote(symbol), range=range_, interval=interval), get)
+
+
+def _get_json(url: str, get) -> dict:
     for attempt in range(RETRIES):
         try:
             resp = get(url, headers=HEADERS, timeout=HTTP_TIMEOUT)
@@ -67,6 +106,22 @@ def _fetch_weekly(symbol: str, get, prev_item: dict) -> list[float]:
         return prev_item.get("weekly", [])
 
 
+def _fetch_max(id_: str, symbol: str, get, prev_item: dict) -> dict:
+    """전체 기간. 실패해도 시세는 살리고 직전 값을 그대로 쓴다."""
+    try:
+        url = MAX_URL.format(symbol=quote(symbol), now=int(time.time()))
+        return max_fields(_get_json(url, get), id_ not in NO_DRAWDOWN)
+    except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as e:
+        log.warning("%s 전체 기간 실패: %s", symbol, e)
+        return {
+            "max_closes": prev_item.get("max_closes", []),
+            "max_drawdowns": prev_item.get("max_drawdowns", []),
+            "max_start": prev_item.get("max_start"),
+            "peak": prev_item.get("peak"),
+            "mdd": prev_item.get("mdd"),
+        }
+
+
 def fetch_quotes(prev: dict[str, dict], get=requests.get) -> list[dict]:
     """설정된 시세를 모두 가져온다. 실패한 항목은 직전 값에 stale 표시를 붙인다."""
     items = []
@@ -84,6 +139,7 @@ def fetch_quotes(prev: dict[str, dict], get=requests.get) -> list[dict]:
                 "chart": daily[-OLD_APP_CHART_POINTS:],
                 "daily": daily,
                 "weekly": _fetch_weekly(symbol, get, prev.get(id_, {})),
+                **_fetch_max(id_, symbol, get, prev.get(id_, {})),
                 "stale": False,
             })
         except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as e:
@@ -94,5 +150,6 @@ def fetch_quotes(prev: dict[str, dict], get=requests.get) -> list[dict]:
             else:
                 items.append({"id": id_, "name": name, "price": None, "change": None,
                               "change_pct": None, "history": [], "chart": [],
-                              "daily": [], "weekly": [], "stale": True})
+                              "daily": [], "weekly": [], "max_closes": [], "max_drawdowns": [],
+                              "max_start": None, "peak": None, "mdd": None, "stale": True})
     return items

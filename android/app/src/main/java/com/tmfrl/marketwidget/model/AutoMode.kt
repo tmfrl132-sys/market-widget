@@ -1,5 +1,11 @@
 package com.tmfrl.marketwidget.model
 
+/** 자동모드에서 시세를 다시 받는 간격 5분. 알람이 몇 초 일찍 울려도 한 번 거르지 않게 조금 짧게 잡는다. */
+private const val AUTO_REFRESH_MS = 270_000L
+
+fun refreshDue(nowMillis: Long, lastRefreshMillis: Long): Boolean =
+    nowMillis - lastRefreshMillis >= AUTO_REFRESH_MS
+
 /** 자동모드에서 돌아가며 보여줄 종목. 이 기간의 차트가 있는 종목만 고르고, 하나도 없으면 전부 쓴다. */
 fun autoQuoteIds(quotes: List<Quote>, period: Period): List<String> {
     val withChart = quotes.filter { chartValues(it, period).size >= 2 }

@@ -20,7 +20,13 @@ val LIVE_SYMBOLS: Map<String, String> = mapOf(
     "BTC" to "BTC-USD",
 )
 
-data class LiveQuote(val price: Double, val change: Double, val changePct: Double, val prevClose: Double)
+data class LiveQuote(
+    val price: Double,
+    val change: Double,
+    val changePct: Double,
+    val prevClose: Double,
+    val intraday: List<Double> = emptyList(),
+)
 
 @Serializable
 private data class ChartResponse(val chart: ChartBody)
@@ -55,6 +61,17 @@ private fun localDate(epochSeconds: Long, offset: Long) =
 
 private fun round2(value: Double) = round(value * 100) / 100
 
+private fun round1(value: Double) = round(value * 10) / 10
+
+private fun replaceLast(values: List<Double>, latest: Double) =
+    if (values.isEmpty()) values else values.dropLast(1) + latest
+
+/** Yahoo 5분봉 응답에서 비어 있지 않은 종가만 뽑는다. */
+fun parseIntraday(text: String): List<Double> {
+    val result = json.decodeFromString<ChartResponse>(text).chart.result?.firstOrNull() ?: return emptyList()
+    return result.indicators.quote.firstOrNull()?.close.orEmpty().filterNotNull().map(::round2)
+}
+
 /** Yahoo 차트 응답에서 현재값과 전일 대비를 구한다. 계산은 수집기 parse_chart와 같다. 값이 모자라면 null. */
 fun parseLiveQuote(text: String): LiveQuote? {
     val result = json.decodeFromString<ChartResponse>(text).chart.result?.firstOrNull() ?: return null
@@ -81,13 +98,16 @@ private fun withLatestDaily(closes: List<Double>, live: LiveQuote): List<Double>
     else -> closes.dropLast(1) + round2(live.price)
 }
 
-/** 직접 받은 시세를 덮어쓰고 차트 끝도 맞춘다. 받지 못한 항목은 그대로 두고, 하나도 못 받았으면 갱신 시각도 그대로 둔다. */
+/** 직접 받은 시세를 덮어쓰고 차트 끝과 낙폭도 맞춘다. 받지 못한 항목은 그대로 두고, 하나도 못 받았으면 갱신 시각도 그대로 둔다. */
 fun applyLiveQuotes(data: MarketData, live: Map<String, LiveQuote>, updatedAt: String): MarketData {
     if (live.isEmpty()) return data
     return data.copy(
         updated_at = updatedAt,
         quotes = data.quotes.map { quote ->
             live[quote.id]?.let {
+                val latest = round2(it.price)
+                val peak = quote.peak?.let { old -> maxOf(old, it.price) }
+                val depth = peak?.let { high -> drawdownPct(it.price, high) }
                 quote.copy(
                     price = it.price,
                     change = it.change,
@@ -95,7 +115,13 @@ fun applyLiveQuotes(data: MarketData, live: Map<String, LiveQuote>, updatedAt: S
                     chart = withLatestDaily(quote.chart, it),
                     daily = withLatestDaily(quote.daily, it),
                     // 주봉은 이번 주 봉이 항상 끝에 있어 바꾸기만 한다
-                    weekly = if (quote.weekly.isEmpty()) quote.weekly else quote.weekly.dropLast(1) + round2(it.price),
+                    weekly = replaceLast(quote.weekly, latest),
+                    max_closes = replaceLast(quote.max_closes, latest),
+                    max_drawdowns = if (depth == null) quote.max_drawdowns else replaceLast(quote.max_drawdowns, round1(depth)),
+                    peak = peak,
+                    mdd = if (depth == null) quote.mdd else quote.mdd?.let { old -> minOf(old, round1(depth)) },
+                    intraday = if (it.intraday.isEmpty()) quote.intraday else replaceLast(it.intraday, latest),
+                    prev_close = round2(it.prevClose),
                     stale = false,
                 )
             } ?: quote

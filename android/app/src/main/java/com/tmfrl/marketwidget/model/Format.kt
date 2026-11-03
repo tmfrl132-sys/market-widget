@@ -17,6 +17,7 @@ val SEOUL: ZoneId = ZoneId.of("Asia/Seoul")
 private val symbols = DecimalFormatSymbols(Locale.US)
 private val bigFormat = DecimalFormat("#,##0", symbols).apply { roundingMode = RoundingMode.HALF_UP }
 private val smallFormat = DecimalFormat("0.00", symbols).apply { roundingMode = RoundingMode.HALF_UP }
+private val oneDecimalFormat = DecimalFormat("0.0", symbols).apply { roundingMode = RoundingMode.HALF_UP }
 private val timeFormat = DateTimeFormatter.ofPattern("HH:mm")
 private val dayFormat = DateTimeFormatter.ofPattern("M/d")
 
@@ -26,6 +27,14 @@ fun formatPrice(price: Double?): String = when {
     kotlin.math.abs(price) >= 1000 -> bigFormat.format(price)
     else -> smallFormat.format(price)
 }
+
+/** 낙폭 문구. 소수 첫째 자리에서 0이 되면 부호를 뗀다. */
+fun formatDrawdown(pct: Double): String =
+    if (pct > -0.05) "0.0%" else "${oneDecimalFormat.format(pct)}%"
+
+/** 낙폭 차트 세로축 숫자. 눈금이 정수면 소수를 뺀다. */
+fun formatAxisPct(tick: Double): String =
+    if (tick == kotlin.math.floor(tick)) "${tick.toInt()}%" else "${oneDecimalFormat.format(tick)}%"
 
 /** 등락 차이 문구. 100 이상은 정수, 그 아래는 소수 둘째 자리. */
 fun formatSignedAmount(change: Double): String {

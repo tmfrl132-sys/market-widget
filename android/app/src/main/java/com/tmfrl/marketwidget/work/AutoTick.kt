@@ -7,6 +7,8 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.SystemClock
+import com.tmfrl.marketwidget.data.Repository
+import com.tmfrl.marketwidget.model.refreshDue
 import com.tmfrl.marketwidget.widget.advanceAutoWidgets
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -46,7 +48,12 @@ class AutoTickReceiver : BroadcastReceiver() {
         val pending = goAsync()
         CoroutineScope(Dispatchers.Default).launch {
             try {
-                if (advanceAutoWidgets(context)) AutoTick.schedule(context)
+                if (advanceAutoWidgets(context)) {
+                    AutoTick.schedule(context)
+                    // 알람이 화면이 켜져 있을 때만 울리므로 시세도 그때만 받는다
+                    val last = Repository.forContext(context).lastRefreshMillis()
+                    if (refreshDue(System.currentTimeMillis(), last)) RefreshWorker.runOnce(context)
+                }
             } finally {
                 pending.finish()
             }
