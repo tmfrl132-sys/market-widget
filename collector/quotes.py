@@ -57,17 +57,37 @@ def drawdowns(closes: list[float]) -> list[float]:
     return result
 
 
+def _bucket_size(count: int) -> int:
+    """묶음 크기. 묶음마다 2점에 처음·마지막 값까지 더해도 MAX_POINTS를 넘지 않게 한다."""
+    if count <= MAX_POINTS:
+        return 1
+    return -(-count // ((MAX_POINTS - 2) // 2))
+
+
+def thin_closes(closes: list[float]) -> list[float]:
+    """차트용으로 점을 줄인다. 묶음의 최저·최고를 시간 순서로 남겨 고점과 바닥이 사라지지 않게 하고, 처음·마지막 값은 지킨다."""
+    size = _bucket_size(len(closes))
+    if size == 1:
+        return closes
+    points = [closes[0]]
+    for start in range(0, len(closes), size):
+        chunk = closes[start:start + size]
+        low, high = chunk.index(min(chunk)), chunk.index(max(chunk))
+        points += [chunk[i] for i in sorted({low, high})]
+    points.append(closes[-1])
+    return points
+
+
 def max_fields(payload: dict, with_drawdown: bool) -> dict:
     """전체 기간 차트와 고점·MDD. 낙폭은 일봉 전체로 계산하고 차트 점만 줄인다."""
     result = payload["chart"]["result"][0]
     bars = [(ts, c) for ts, c in zip(result["timestamp"], result["indicators"]["quote"][0]["close"])
             if c is not None]
     closes = [c for _, c in bars]
-    # 묶음의 가격은 마지막 값, 낙폭은 가장 깊은 값을 써서 MDD 바닥이 차트에서 사라지지 않게 한다
-    size = -(-len(closes) // MAX_POINTS)
+    size = _bucket_size(len(closes))
     chunks = range(0, len(closes), size)
     fields = {
-        "max_closes": [round(closes[min(i + size, len(closes)) - 1], 2) for i in chunks],
+        "max_closes": [round(c, 2) for c in thin_closes(closes)],
         "max_drawdowns": [],
         "max_start": _local_date(bars[0][0], result["meta"].get("gmtoffset", 0)).year,
         "peak": None,
@@ -75,6 +95,7 @@ def max_fields(payload: dict, with_drawdown: bool) -> dict:
     }
     if with_drawdown:
         depths = drawdowns(closes)
+        # 묶음의 가장 깊은 값을 써서 MDD 바닥이 차트에서 사라지지 않게 한다
         fields["max_drawdowns"] = [round(min(depths[i:i + size]), 1) for i in chunks]
         fields["peak"] = round(max(closes), 2)
         fields["mdd"] = round(min(depths), 1)

@@ -18,6 +18,7 @@ private val symbols = DecimalFormatSymbols(Locale.US)
 private val bigFormat = DecimalFormat("#,##0", symbols).apply { roundingMode = RoundingMode.HALF_UP }
 private val smallFormat = DecimalFormat("0.00", symbols).apply { roundingMode = RoundingMode.HALF_UP }
 private val oneDecimalFormat = DecimalFormat("0.0", symbols).apply { roundingMode = RoundingMode.HALF_UP }
+private val exponentFormat = DecimalFormat("0.##", symbols)
 private val timeFormat = DateTimeFormatter.ofPattern("HH:mm")
 private val dayFormat = DateTimeFormatter.ofPattern("M/d")
 
@@ -27,6 +28,8 @@ fun formatPrice(price: Double?): String = when {
     kotlin.math.abs(price) >= 1000 -> bigFormat.format(price)
     else -> smallFormat.format(price)
 }
+
+fun formatExponent(exponent: Double): String = exponentFormat.format(exponent)
 
 /** 낙폭 문구. 소수 첫째 자리에서 0이 되면 부호를 뗀다. */
 fun formatDrawdown(pct: Double): String =

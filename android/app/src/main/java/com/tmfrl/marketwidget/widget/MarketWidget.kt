@@ -62,7 +62,10 @@ import com.tmfrl.marketwidget.model.formatChangeBadge
 import com.tmfrl.marketwidget.model.formatDday
 import com.tmfrl.marketwidget.model.formatDrawdown
 import com.tmfrl.marketwidget.model.formatEventDate
+import com.tmfrl.marketwidget.model.YAxis
+import com.tmfrl.marketwidget.model.formatPowerOfTen
 import com.tmfrl.marketwidget.model.formatPrice
+import com.tmfrl.marketwidget.model.logChartFor
 import com.tmfrl.marketwidget.model.formatSignedAmount
 import com.tmfrl.marketwidget.model.formatUpdatedAt
 import com.tmfrl.marketwidget.model.seoulToday
@@ -121,6 +124,9 @@ private val QUOTE_ID = ActionParameters.Key<String>("quote_id")
 private val PERIOD = stringPreferencesKey("period")
 private val PERIOD_NAME = ActionParameters.Key<String>("period_name")
 
+/** 5년·MAX 차트의 로그 눈금 사용 여부. 위젯마다 따로 기억한다. */
+private val LOG_SCALE = booleanPreferencesKey("log_scale")
+
 /** 자동모드 여부와, 끌 때 되돌아갈 켜기 전 선택. 위젯마다 따로 기억한다. */
 private val AUTO = booleanPreferencesKey("auto")
 private val SAVED_SELECTED = stringPreferencesKey("saved_selected")
@@ -140,7 +146,8 @@ class MarketWidget : GlanceAppWidget() {
             val state = currentState<Preferences>()
             state[DATA_VERSION]
             WidgetContent(
-                repository.cached(), ZonedDateTime.now(), state[SELECTED], parsePeriod(state[PERIOD]), state[AUTO] == true,
+                repository.cached(), ZonedDateTime.now(), state[SELECTED], parsePeriod(state[PERIOD]),
+                state[LOG_SCALE] == true, state[AUTO] == true,
             )
         }
     }
@@ -151,6 +158,14 @@ class SelectPeriodAction : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
         val name = parameters[PERIOD_NAME] ?: return
         updateAppWidgetState(context, glanceId) { it[PERIOD] = name }
+        MarketWidget().update(context, glanceId)
+    }
+}
+
+/** 로그 버튼을 누르면 켜고 끈다. */
+class ToggleLogAction : ActionCallback {
+    override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
+        updateAppWidgetState(context, glanceId) { it[LOG_SCALE] = it[LOG_SCALE] != true }
         MarketWidget().update(context, glanceId)
     }
 }
@@ -239,7 +254,9 @@ private fun trendColors(pct: Double?): Pair<Color, Color> = when (trendOf(pct)) 
 private fun Dp.toPx(density: Float) = (value * density).toInt()
 
 @Composable
-private fun WidgetContent(data: MarketData?, now: ZonedDateTime, selected: String?, period: Period, auto: Boolean) {
+private fun WidgetContent(
+    data: MarketData?, now: ZonedDateTime, selected: String?, period: Period, logScale: Boolean, auto: Boolean,
+) {
     val size = LocalSize.current
     val large = size.height >= DETAIL_MIN_HEIGHT
     Column(
@@ -257,15 +274,15 @@ private fun WidgetContent(data: MarketData?, now: ZonedDateTime, selected: Strin
                 modifier = GlanceModifier.clickable(actionRunCallback<RefreshAction>()),
             )
         } else {
-            QuotesAndDetail(data, now, selected, period, auto, size, large, GlanceModifier.defaultWeight())
+            QuotesAndDetail(data, now, selected, period, logScale, auto, size, large, GlanceModifier.defaultWeight())
         }
     }
 }
 
 @Composable
 private fun QuotesAndDetail(
-    data: MarketData, now: ZonedDateTime, selected: String?, period: Period, auto: Boolean, size: DpSize, large: Boolean,
-    modifier: GlanceModifier,
+    data: MarketData, now: ZonedDateTime, selected: String?, period: Period, logScale: Boolean, auto: Boolean,
+    size: DpSize, large: Boolean, modifier: GlanceModifier,
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
         val tileWidth = (size.width - 20.dp) / 5 - 4.dp
@@ -282,7 +299,7 @@ private fun QuotesAndDetail(
             val detailHeight = maxOf(60.dp, size.height - TOP_PART_HEIGHT)
             val chosen = data.quotes.firstOrNull { it.id == selected }
             if (chosen != null && chartValues(chosen, period).size >= 2) {
-                ChartPanel(chosen, period, auto, size.width - 20.dp, detailHeight, GlanceModifier.defaultWeight())
+                ChartPanel(chosen, period, logScale, auto, size.width - 20.dp, detailHeight, GlanceModifier.defaultWeight())
             } else if (chosen != null) {
                 // 앱 업데이트 직후처럼 기기에 저장된 data.json이 차트 데이터 없는 옛 형식일 때
                 Text(
@@ -291,7 +308,7 @@ private fun QuotesAndDetail(
                     modifier = GlanceModifier.clickable(actionRunCallback<RefreshAction>()),
                 )
                 // 고른 기간의 데이터가 없어도 다른 기간으로 옮길 수 있게 둔다
-                PeriodSelector(period)
+                PeriodSelector(period, logScale)
             } else {
                 val today = seoulToday(now)
                 val rows = eventRows(detailHeight.value - 20f, EVENT_ROW_HEIGHT.value, min = 3)
@@ -370,7 +387,9 @@ private fun QuoteTile(quote: Quote, selected: Boolean, showSpark: Boolean, tileW
 }
 
 @Composable
-private fun ChartPanel(quote: Quote, period: Period, auto: Boolean, width: Dp, height: Dp, modifier: GlanceModifier) {
+private fun ChartPanel(
+    quote: Quote, period: Period, logScale: Boolean, auto: Boolean, width: Dp, height: Dp, modifier: GlanceModifier,
+) {
     val values = chartValues(quote, period)
     val summary = chartSummary(values) ?: return
     // 오늘 차트는 전일 종가가 기준이고, 나머지는 기간 첫 값이 기준이다
@@ -388,10 +407,15 @@ private fun ChartPanel(quote: Quote, period: Period, auto: Boolean, width: Dp, h
     val priceHeight = if (showDrawdownChart) imagesHeight - drawdownHeight else imagesHeight
     val fullW = width.toPx(density)
     // 두 그림을 합쳐도 전송 크기 제한을 넘지 않게 픽셀을 나눠 쓴다
+    // 로그는 첫 값 대비 배수의 지수로 그린다. 점선 문구에는 실제 값을 그대로 쓴다.
+    val logChart = if (logScale && period.supportsLog) logChartFor(values) else null
+    val axisLabel: (Double) -> String = if (logChart != null) ::formatPowerOfTen else ::formatPrice
     val bitmap = detailBitmap(
-        values, color, fullW, priceHeight.toPx(density),
+        logChart?.values ?: values, color, fullW, priceHeight.toPx(density),
         if (showDrawdownChart) MAX_CHART_PIXELS * 6 / 10 else MAX_CHART_PIXELS, density,
-        baseline, if (today) "전일" else "시작", ::formatPrice, null,
+        if (logChart != null) 0.0 else baseline,
+        "${if (today) "전일" else "시작"} ${formatPrice(baseline)}",
+        axisLabel, null, logChart?.axis,
     )
     // 차트나 머리줄을 누르면 닫는다. 기간 선택 줄은 따로 눌린다.
     val close = actionRunCallback<SelectQuoteAction>(actionParametersOf(QUOTE_ID to quote.id))
@@ -446,14 +470,14 @@ private fun ChartPanel(quote: Quote, period: Period, auto: Boolean, width: Dp, h
             Spacer(GlanceModifier.defaultWeight())
             Text("현재 ${formatPrice(quote.price)}", style = style(color, 10, bold = true))
         }
-        PeriodSelector(period)
+        PeriodSelector(period, logScale)
     }
 }
 
 /** 큰 차트 비트맵. 전송 크기 제한 때문에 픽셀 수를 줄이고 위젯이 늘려서 그리게 하므로 선과 글자도 같은 비율로 줄인다. */
 private fun detailBitmap(
     values: List<Double>, color: Color, fullW: Int, fullH: Int, maxPixels: Int, density: Float,
-    baseline: Double?, baselineName: String, axisLabel: (Double) -> String, areaBase: Double?,
+    baseline: Double?, baselineLabel: String, axisLabel: (Double) -> String, areaBase: Double?, fixedAxis: YAxis? = null,
 ): Bitmap {
     val (bw, bh) = fitBitmap(fullW, fullH, maxPixels)
     val scale = bw.toFloat() / fullW
@@ -468,15 +492,16 @@ private fun detailBitmap(
         textPx = 11f * density * scale,
         textColor = SUBTLE.toArgb(),
         baseline = baseline,
-        baselineName = baselineName,
+        baselineLabel = baselineLabel,
         axisLabel = axisLabel,
         areaBase = areaBase,
+        fixedAxis = fixedAxis,
     )
 }
 
-/** 차트 아래 라디오 버튼 줄. 누르면 바로 그 기간으로 바뀐다. */
+/** 차트 아래 라디오 버튼 줄. 누르면 바로 그 기간으로 바뀐다. 5년·MAX에서는 끝에 로그 버튼이 나온다. */
 @Composable
-private fun PeriodSelector(current: Period) {
+private fun PeriodSelector(current: Period, logScale: Boolean) {
     val colors = RadioButtonDefaults.colors(
         checkedColor = ColorProvider(DOWN),
         uncheckedColor = ColorProvider(SUBTLE),
@@ -491,6 +516,16 @@ private fun PeriodSelector(current: Period) {
                 colors = colors,
                 modifier = GlanceModifier.defaultWeight(),
             )
+        }
+        if (current.supportsLog) {
+            Box(
+                modifier = GlanceModifier.background(if (logScale) DOWN else TILE)
+                    .cornerRadius(6.dp)
+                    .padding(horizontal = 6.dp, vertical = 1.dp)
+                    .clickable(actionRunCallback<ToggleLogAction>()),
+            ) {
+                Text("로그", style = style(if (logScale) TEXT else SUBTLE, 11, bold = logScale))
+            }
         }
     }
 }

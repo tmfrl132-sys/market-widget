@@ -200,11 +200,29 @@ def test_max_fields_thins_points_but_keeps_trough_and_last():
     closes[700] = 20.0
     closes[-1] = 90.0
     fields = quotes.max_fields(max_payload(closes), with_drawdown=True)
-    assert len(fields["max_closes"]) == 500
-    assert len(fields["max_drawdowns"]) == 500
+    assert len(fields["max_closes"]) <= 500
+    assert len(fields["max_drawdowns"]) <= 500
     assert min(fields["max_drawdowns"]) == -80.0
     assert fields["mdd"] == -80.0
     assert fields["max_closes"][-1] == 90.0
+
+
+def test_thin_closes_keeps_peak_trough_first_and_last():
+    closes = [float(100 + i % 7) for i in range(14000)]
+    closes[0] = 77.0
+    closes[5000] = 9114.0
+    closes[5003] = 11.0
+    closes[-1] = 55.0
+    points = quotes.thin_closes(closes)
+    assert len(points) <= 500
+    assert points[0] == 77.0
+    assert points[-1] == 55.0
+    assert 9114.0 in points and 11.0 in points
+    assert points.index(9114.0) < points.index(11.0)
+
+
+def test_thin_closes_short_series_unchanged():
+    assert quotes.thin_closes([1.0, 3.0, 2.0]) == [1.0, 3.0, 2.0]
 
 
 def test_requests_full_history_with_explicit_dates():

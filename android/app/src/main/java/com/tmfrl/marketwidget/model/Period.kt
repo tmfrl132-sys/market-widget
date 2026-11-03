@@ -7,7 +7,10 @@ enum class Period(val label: String, val agoLabel: String) {
     THREE_MONTHS("3개월", "3개월 전"),
     ONE_YEAR("1년", "1년 전"),
     FIVE_YEARS("5년", "5년 전"),
-    MAX("MAX", "처음"),
+    MAX("MAX", "처음");
+
+    /** 값 범위가 넓어 로그 눈금이 쓸모 있는 기간. */
+    val supportsLog: Boolean get() = this == FIVE_YEARS || this == MAX
 }
 
 private const val ONE_MONTH_DAYS = 22

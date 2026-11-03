@@ -18,8 +18,8 @@ import com.tmfrl.marketwidget.model.yPosition
  * 위젯 전송 크기 제한(약 1MB)이 있어 배경을 칠하고 RGB_565(픽셀당 2바이트)로 만든다.
  * detailed는 큰 차트용: 오른쪽 세로축 숫자와 눈금선, 기준값 점선, 영역 채우기, 마지막 값 점.
  * 아래 인자는 detailed일 때만 쓴다.
- * baseline은 점선 값(없으면 점선 없음), baselineName은 점선 이름, axisLabel은 세로축 숫자 형식,
- * areaBase는 영역을 채울 기준값(없으면 차트 바닥까지).
+ * baseline은 점선 값(없으면 점선 없음), baselineLabel은 점선 문구, axisLabel은 세로축 숫자 형식,
+ * areaBase는 영역을 채울 기준값(없으면 차트 바닥까지), fixedAxis는 정해 둔 세로축(없으면 값으로 계산).
  */
 fun renderLine(
     values: List<Double>,
@@ -32,9 +32,10 @@ fun renderLine(
     textPx: Float = 0f,
     textColor: Int = 0,
     baseline: Double? = null,
-    baselineName: String = "",
+    baselineLabel: String = "",
     axisLabel: (Double) -> String = ::formatPrice,
     areaBase: Double? = null,
+    fixedAxis: YAxis? = null,
 ): Bitmap {
     val w = widthPx.coerceAtLeast(2)
     val h = heightPx.coerceAtLeast(2)
@@ -43,7 +44,7 @@ fun renderLine(
     canvas.drawColor(backgroundColor)
 
     // 점선과 영역 기준값도 눈금 범위 안에 들어와야 한다
-    val axis = if (detailed) yAxisFor(values + listOfNotNull(baseline, areaBase)) else null
+    val axis = if (detailed) fixedAxis ?: yAxisFor(values + listOfNotNull(baseline, areaBase)) else null
     val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = textColor
         textSize = textPx
@@ -95,8 +96,7 @@ fun renderLine(
         canvas.drawCircle(x, y, strokePx * 2.2f, dot)
         canvas.drawCircle(x, y, strokePx * 1.1f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = backgroundColor })
         if (axis != null && baseline != null) {
-            val label = "$baselineName ${formatPrice(baseline)}"
-            drawBaselineLabel(canvas, label, baseline, values.last(), axis, text, backgroundColor, plotW, h.toFloat(), pad)
+            drawBaselineLabel(canvas, baselineLabel, baseline, values.last(), axis, text, backgroundColor, plotW, h.toFloat(), pad)
         }
     }
     return bitmap
