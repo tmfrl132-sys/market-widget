@@ -1,7 +1,8 @@
 name: collect
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    # 정각·30분은 GitHub 부하가 몰려 실행이 자주 밀리거나 빠져서 피한다
+    - cron: "7,37 * * * *"
   workflow_dispatch:
     inputs:
       force:
