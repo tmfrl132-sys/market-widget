@@ -26,9 +26,10 @@ def parse_chart(payload: dict) -> tuple[float, float | None, list[float]]:
     rows = list(zip(result["timestamp"], result["indicators"]["quote"][0]["close"]))
     closes = [c for _, c in rows if c is not None]
     price = meta.get("regularMarketPrice") or closes[-1]
-    prev_close = closes[-2]
     market_time = meta.get("regularMarketTime")
-    if market_time is not None:
+    if market_time is None:
+        prev_close = closes[-2]
+    else:
         # 마지막 봉이 시세 시각과 같은 날이면 그 앞 봉이 전일 종가이고, 아니면 마지막 봉이 전일 종가다.
         # 그 봉이 비어 있으면 더 앞 종가와 비교하지 않는다. 전전일 종가와 비교하면 등락률이 틀린다.
         offset = meta.get("gmtoffset", 0)
