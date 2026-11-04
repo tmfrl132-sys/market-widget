@@ -104,6 +104,45 @@ def test_prev_close_when_today_bar_is_null():
     assert prev_close == 100.0
 
 
+def day_payload(closes, today_index):
+    # 서울 2026-11-02부터 하루 간격 일봉. regularMarketTime은 today_index 날의 장중이다.
+    base = 1793577600 - 32400
+    day = 86400
+    return {"chart": {"result": [{
+        "meta": {"regularMarketPrice": 5619.4, "regularMarketTime": base + today_index * day + 3600,
+                 "gmtoffset": 32400},
+        "timestamp": [base + i * day for i in range(len(closes))],
+        "indicators": {"quote": [{"close": closes}]},
+    }]}}
+
+
+def test_prev_close_unknown_when_previous_day_bar_is_empty():
+    # 11/4 10:37 실제 사례: 11/3 일봉이 비어 있어 11/2 종가와 비교해 -4.09%가 나왔다.
+    _, prev_close, _ = quotes.parse_chart(day_payload([5859.08, None, 5619.4], today_index=2))
+    assert prev_close is None
+
+
+def test_prev_close_unknown_when_today_bar_absent_and_last_bar_empty():
+    _, prev_close, _ = quotes.parse_chart(day_payload([5859.08, None], today_index=2))
+    assert prev_close is None
+
+
+def test_prev_close_when_today_bar_absent():
+    _, prev_close, _ = quotes.parse_chart(day_payload([5859.08, 5648.79], today_index=2))
+    assert prev_close == 5648.79
+
+
+def test_unknown_prev_close_leaves_change_empty_but_keeps_price():
+    def get(url, **kwargs):
+        return FakeResponse(day_payload([5859.08, None, 5619.4], today_index=2))
+
+    ks11 = next(q for q in quotes.fetch_quotes({}, get=get) if q["id"] == "KS11")
+    assert ks11["price"] == 5619.4
+    assert ks11["change"] is None
+    assert ks11["change_pct"] is None
+    assert ks11["stale"] is False
+
+
 def test_fetch_quotes_includes_chart_closes():
     ks11 = next(q for q in quotes.fetch_quotes({}, get=ok_get) if q["id"] == "KS11")
     assert ks11["chart"] == [2600.0, 2610.0, 2622.5, 2630.1, 2637.82, 2650.12]

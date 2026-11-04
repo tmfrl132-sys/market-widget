@@ -4,10 +4,13 @@ import android.content.Context
 import com.tmfrl.marketwidget.model.LIVE_SYMBOLS
 import com.tmfrl.marketwidget.model.LiveQuote
 import com.tmfrl.marketwidget.model.MarketData
+import com.tmfrl.marketwidget.model.NAVER_CODES
 import com.tmfrl.marketwidget.model.applyLiveQuotes
 import com.tmfrl.marketwidget.model.encodeMarketData
 import com.tmfrl.marketwidget.model.parseIntraday
 import com.tmfrl.marketwidget.model.parseLiveQuote
+import com.tmfrl.marketwidget.model.parseNaverIndex
+import com.tmfrl.marketwidget.model.parseNaverMinutes
 import com.tmfrl.marketwidget.model.parseMarketData
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -26,10 +29,12 @@ import java.time.OffsetDateTime
 const val DATA_URL = "https://tmfrl132-sys.github.io/market-widget/data.json"
 private const val YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/%s?range=5d&interval=1d"
 private const val INTRADAY_URL = "https://query1.finance.yahoo.com/v8/finance/chart/%s?range=1d&interval=5m"
+private const val NAVER_INDEX_URL = "https://m.stock.naver.com/api/index/%s/basic"
+private const val NAVER_MINUTE_URL = "https://api.stock.naver.com/chart/domestic/index/%s/minute"
 private const val TIMEOUT_MS = 10_000
 
 /**
- * data.json을 받고, 시세는 Yahoo에서 직접 받은 값으로 덮어써 기기에 캐시한다.
+ * data.json을 받고, 시세는 국내 지수는 네이버, 나머지는 Yahoo에서 직접 받은 값으로 덮어써 기기에 캐시한다.
  * data.json을 받지 못하면 캐시에 시세만 덮어쓰고, 둘 다 실패하면 마지막으로 받은 값을 쓴다.
  */
 class Repository(
@@ -80,27 +85,34 @@ class Repository(
         private suspend fun fetchLiveQuotes(): Map<String, LiveQuote> = coroutineScope {
             LIVE_SYMBOLS.map { (id, symbol) ->
                 async(Dispatchers.IO) {
-                    try {
-                        val encoded = URLEncoder.encode(symbol, "UTF-8")
-                        parseLiveQuote(httpGet(YAHOO_URL.format(encoded)))?.let {
-                            id to it.copy(intraday = fetchIntraday(encoded))
-                        }
-                    } catch (e: IOException) {
-                        null
-                    } catch (e: IllegalArgumentException) {
-                        null
-                    }
+                    val live = NAVER_CODES[id]?.let(::fetchNaver) ?: fetchYahoo(symbol)
+                    live?.let { id to it }
                 }
             }.awaitAll().filterNotNull().toMap()
         }
 
-        /** 오늘 차트용 5분봉. 실패해도 시세는 살린다. */
-        private fun fetchIntraday(encodedSymbol: String): List<Double> = try {
-            parseIntraday(httpGet(INTRADAY_URL.format(encodedSymbol)))
+        /** 네트워크 오류나 잘못된 응답(SerializationException 포함)이면 fallback을 돌려준다. */
+        private inline fun <T> orElse(fallback: T, block: () -> T): T = try {
+            block()
         } catch (e: IOException) {
-            emptyList()
+            fallback
         } catch (e: IllegalArgumentException) {
-            emptyList()
+            fallback
+        }
+
+        private fun fetchNaver(code: String): LiveQuote? = orElse(null) {
+            parseNaverIndex(httpGet(NAVER_INDEX_URL.format(code)))?.copy(
+                // 분봉이 실패해도 시세는 살린다
+                intraday = orElse(emptyList()) { parseNaverMinutes(httpGet(NAVER_MINUTE_URL.format(code))) },
+            )
+        }
+
+        private fun fetchYahoo(symbol: String): LiveQuote? = orElse(null) {
+            val encoded = URLEncoder.encode(symbol, "UTF-8")
+            parseLiveQuote(httpGet(YAHOO_URL.format(encoded)))?.copy(
+                // 5분봉이 실패해도 시세는 살린다
+                intraday = orElse(emptyList()) { parseIntraday(httpGet(INTRADAY_URL.format(encoded))) },
+            )
         }
 
         private fun httpGet(url: String): String {

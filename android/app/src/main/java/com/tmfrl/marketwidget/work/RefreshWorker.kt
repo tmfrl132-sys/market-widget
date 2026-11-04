@@ -1,12 +1,14 @@
 package com.tmfrl.marketwidget.work
 
 import android.content.Context
+import android.os.Build
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.OutOfQuotaPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -40,8 +42,13 @@ class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         }
 
         fun runOnce(context: Context) {
-            val request = OneTimeWorkRequestBuilder<RefreshWorker>().setConstraints(network).build()
-            WorkManager.getInstance(context).enqueueUniqueWork(NOW, ExistingWorkPolicy.REPLACE, request)
+            val builder = OneTimeWorkRequestBuilder<RefreshWorker>().setConstraints(network)
+            // 거의 열지 않는 앱은 안드로이드가 작업을 크게 늦춰서 바로 돌게 요청한다.
+            // 안드로이드 11 이하는 알림이 필요한 방식이라 쓰지 않는다.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                builder.setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+            }
+            WorkManager.getInstance(context).enqueueUniqueWork(NOW, ExistingWorkPolicy.REPLACE, builder.build())
         }
     }
 }

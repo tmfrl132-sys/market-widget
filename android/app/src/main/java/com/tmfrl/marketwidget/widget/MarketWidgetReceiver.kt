@@ -16,6 +16,12 @@ class MarketWidgetReceiver : GlanceAppWidgetReceiver() {
         super.onEnabled(context)
         RefreshWorker.schedule(context)
         RefreshWorker.runOnce(context)
+        AutoTick.schedule(context)
+    }
+
+    override fun onDisabled(context: Context) {
+        super.onDisabled(context)
+        AutoTick.cancel(context)
     }
 
     // 앱 업데이트 뒤에도 불린다. 새 버전이 기대하는 형식으로 바로 다시 받고, 주기 작업과 자동모드 알람도 되살린다.

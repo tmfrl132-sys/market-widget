@@ -111,8 +111,6 @@ private val UP_TINT = Color(0x33FF5A5F)
 private val DOWN_TINT = Color(0x334D8DFF)
 private val FLAT_TINT = Color(0x338B95A7)
 
-private const val SPARK_POINTS = 20
-
 /** 새 데이터를 받을 때마다 올리는 값. 위젯 상태가 바뀌어야 Glance가 다시 그린다. */
 private val DATA_VERSION = longPreferencesKey("data_version")
 
@@ -213,16 +211,17 @@ class ToggleAutoAction : ActionCallback {
             }
         }
         MarketWidget().update(context, glanceId)
-        // 끈 경우에도 걸어 둔다. 자동모드인 위젯이 없으면 다음 알람에서 멈춘다.
+        // 지금부터 1분을 새로 센다
         AutoTick.schedule(context)
     }
 }
 
-/** 자동모드인 위젯을 다음 종목으로 넘긴다. 자동모드인 위젯이 있었는지 돌려준다. */
+/** 자동모드인 위젯을 다음 종목으로 넘긴다. 홈 화면에 위젯이 하나라도 있는지 돌려준다. */
 suspend fun advanceAutoWidgets(context: Context): Boolean {
-    val quotes = Repository.forContext(context).cached()?.quotes.orEmpty()
-    var any = false
-    GlanceAppWidgetManager(context).getGlanceIds(MarketWidget::class.java).forEach { id ->
+    // 자동모드가 꺼져 있으면 파일을 읽지 않는다. 이 함수는 화면이 켜져 있는 동안 1분마다 불린다.
+    val quotes by lazy { Repository.forContext(context).cached()?.quotes.orEmpty() }
+    val ids = GlanceAppWidgetManager(context).getGlanceIds(MarketWidget::class.java)
+    ids.forEach { id ->
         var auto = false
         updateAppWidgetState(context, id) { prefs ->
             auto = prefs[AUTO] == true
@@ -231,12 +230,9 @@ suspend fun advanceAutoWidgets(context: Context): Boolean {
                 if (next != null) prefs[SELECTED] = next
             }
         }
-        if (auto) {
-            any = true
-            MarketWidget().update(context, id)
-        }
+        if (auto) MarketWidget().update(context, id)
     }
-    return any
+    return ids.isNotEmpty()
 }
 
 private fun style(color: Color, size: Int, bold: Boolean = false) = TextStyle(
@@ -362,25 +358,30 @@ private fun QuoteTile(quote: Quote, selected: Boolean, showSpark: Boolean, tileW
             Box(modifier = GlanceModifier.background(tint).cornerRadius(6.dp).padding(horizontal = 4.dp, vertical = 1.dp)) {
                 Text(formatChangeBadge(quote.change_pct), style = style(color.copy(alpha = alpha), 10, bold = true), maxLines = 1)
             }
-            if (showSpark && quote.chart.size >= 2) {
+            if (showSpark) {
                 val density = LocalContext.current.resources.displayMetrics.density
                 val sparkHeight = 18.dp
-                val bitmap = renderLine(
-                    values = quote.chart.takeLast(SPARK_POINTS),
-                    lineColor = color.toArgb(),
-                    backgroundColor = tileColor.toArgb(),
-                    widthPx = (tileWidth - 12.dp).toPx(density),
-                    heightPx = sparkHeight.toPx(density),
-                    strokePx = 1.5f * density,
-                    detailed = false,
-                )
                 Spacer(GlanceModifier.height(4.dp))
-                Image(
-                    provider = ImageProvider(bitmap),
-                    contentDescription = null,
-                    contentScale = ContentScale.FillBounds,
-                    modifier = GlanceModifier.fillMaxWidth().height(sparkHeight),
-                )
+                // 그 시장의 최근 장 시작부터 받은 시각까지만 그린다. 아직 점이 모자라면 타일 높이만 맞춘다.
+                if (quote.intraday.size >= 2) {
+                    val bitmap = renderLine(
+                        values = quote.intraday,
+                        lineColor = color.toArgb(),
+                        backgroundColor = tileColor.toArgb(),
+                        widthPx = (tileWidth - 12.dp).toPx(density),
+                        heightPx = sparkHeight.toPx(density),
+                        strokePx = 1.5f * density,
+                        detailed = false,
+                    )
+                    Image(
+                        provider = ImageProvider(bitmap),
+                        contentDescription = null,
+                        contentScale = ContentScale.FillBounds,
+                        modifier = GlanceModifier.fillMaxWidth().height(sparkHeight),
+                    )
+                } else {
+                    Spacer(GlanceModifier.height(sparkHeight))
+                }
             }
         }
     }

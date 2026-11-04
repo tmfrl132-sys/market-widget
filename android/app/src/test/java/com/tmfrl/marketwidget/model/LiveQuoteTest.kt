@@ -47,6 +47,55 @@ class LiveQuoteTest {
         assertNull(parseLiveQuote("""{"chart": {"result": null, "error": {"code": "Not Found"}}}"""))
     }
 
+    @Test fun parse_nullWhenPreviousDayBarIsEmpty() {
+        // 11/4 10:37 실제 사례: 전일 봉이 비어 있어 전전일 종가와 비교해 -4.09%가 나왔다
+        val day0 = day1 - 86400
+        assertNull(parseLiveQuote(chart("5619.4", day2 + 3600, listOf(day0, day1, day2), "[5859.08, null, 5619.4]")))
+    }
+
+    @Test fun parse_nullWhenTodayBarAbsentAndLastBarEmpty() {
+        assertNull(parseLiveQuote(chart("5619.4", day2 + 3600, listOf(day1 - 86400, day1), "[5859.08, null]")))
+    }
+
+    @Test fun parse_usesLastBarWhenTodayBarAbsent() {
+        val live = parseLiveQuote(chart("5619.4", day2 + 3600, listOf(day1 - 86400, day1), "[5859.08, 5648.79]"))!!
+        assertEquals(5648.79, live.prevClose, 0.0)
+    }
+
+    private val naverIndex = """{"stockName": "코스피", "closePrice": "5,648.79",
+        "compareToPreviousClosePrice": "-210.29", "fluctuationsRatio": "-3.59", "marketStatus": "CLOSE"}"""
+
+    @Test fun naverIndex_readsCommaNumbersAndSign() {
+        val live = parseNaverIndex(naverIndex)!!
+        assertEquals(5648.79, live.price, 0.0)
+        assertEquals(-210.29, live.change, 0.0)
+        assertEquals(-3.59, live.changePct, 0.0)
+        assertEquals(5859.08, live.prevClose, 0.0)
+    }
+
+    @Test fun naverIndex_nullWhenValueMissing() {
+        assertNull(parseNaverIndex("""{"closePrice": "5,648.79"}"""))
+        assertNull(parseNaverIndex("""{"closePrice": "-", "compareToPreviousClosePrice": "1", "fluctuationsRatio": "1"}"""))
+    }
+
+    private fun minute(time: String, price: String) = """{"localDateTime": "$time", "currentPrice": $price}"""
+
+    @Test fun naverMinutes_everyFifthLatestDayKeepsLast() {
+        val today = (0..6).map { minute("2026110409%02d00".format(it), "${100 + it}.0") }
+        val text = (listOf(minute("20261103153000", "1.0")) + today).joinToString(",", "[", "]")
+        assertEquals(listOf(100.0, 105.0, 106.0), parseNaverMinutes(text))
+    }
+
+    @Test fun naverMinutes_skipsEmptyAndHandlesNoData() {
+        val text = listOf(minute("20261104090000", "100.0"), minute("20261104090100", "null")).joinToString(",", "[", "]")
+        assertEquals(listOf(100.0), parseNaverMinutes(text))
+        assertEquals(emptyList<Double>(), parseNaverMinutes("[]"))
+    }
+
+    @Test fun naverCodes_onlyKoreanIndexes() {
+        assertEquals(setOf("KS11", "KQ11"), NAVER_CODES.keys)
+    }
+
     @Test fun apply_overwritesReceivedAndKeepsOthers() {
         val data = MarketData("old", listOf(quote("KS11", 100.0, stale = true), quote("BTC", 50.0)), emptyList())
         val merged = applyLiveQuotes(data, mapOf("KS11" to LiveQuote(95.0, -5.0, -5.0, 100.0)), "new")

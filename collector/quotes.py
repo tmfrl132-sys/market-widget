@@ -19,22 +19,21 @@ OLD_APP_CHART_POINTS = 63  # v0.3.0 이하 앱이 읽는 chart(3개월)
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 
-def parse_chart(payload: dict) -> tuple[float, float, list[float]]:
-    """(현재값, 전일 종가, 최근 5개 종가)를 돌려준다."""
+def parse_chart(payload: dict) -> tuple[float, float | None, list[float]]:
+    """(현재값, 전일 종가, 최근 5개 종가)를 돌려준다. 전일 종가를 알 수 없으면 None이다."""
     result = payload["chart"]["result"][0]
     meta = result["meta"]
-    bars = [(ts, c) for ts, c in zip(result["timestamp"], result["indicators"]["quote"][0]["close"])
-            if c is not None]
-    closes = [c for _, c in bars]
+    rows = list(zip(result["timestamp"], result["indicators"]["quote"][0]["close"]))
+    closes = [c for _, c in rows if c is not None]
     price = meta.get("regularMarketPrice") or closes[-1]
-    # 마지막 유효 봉이 시세 시각과 같은 날이면 그 앞 봉이 전일 종가다.
-    # 오늘 봉이 아직 비어 있으면(null) 마지막 유효 봉이 곧 전일 종가다.
     prev_close = closes[-2]
     market_time = meta.get("regularMarketTime")
     if market_time is not None:
+        # 마지막 봉이 시세 시각과 같은 날이면 그 앞 봉이 전일 종가이고, 아니면 마지막 봉이 전일 종가다.
+        # 그 봉이 비어 있으면 더 앞 종가와 비교하지 않는다. 전전일 종가와 비교하면 등락률이 틀린다.
         offset = meta.get("gmtoffset", 0)
-        if _local_date(bars[-1][0], offset) != _local_date(market_time, offset):
-            prev_close = closes[-1]
+        last_is_today = _local_date(rows[-1][0], offset) == _local_date(market_time, offset)
+        prev_close = rows[-2][1] if last_is_today else rows[-1][1]
     return price, prev_close, closes[-5:]
 
 
@@ -170,12 +169,13 @@ def fetch_quotes(prev: dict[str, dict], get=requests.get) -> list[dict]:
         try:
             payload = _get_chart(symbol, get)
             price, prev_close, history = parse_chart(payload)
-            change = price - prev_close
+            change = None if prev_close is None else round(price - prev_close, 2)
+            change_pct = None if prev_close is None else round((price - prev_close) / prev_close * 100, 2)
             daily = chart_closes(payload)
             items.append({
                 "id": id_, "name": name, "price": price,
-                "change": round(change, 2),
-                "change_pct": round(change / prev_close * 100, 2),
+                "change": change,
+                "change_pct": change_pct,
                 "history": history,
                 "chart": daily[-OLD_APP_CHART_POINTS:],
                 "daily": daily,
