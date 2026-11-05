@@ -30,6 +30,23 @@ class ChartTest {
         assertEquals(listOf(0f to 75f, 100f to 50f), points)
     }
 
+    @Test fun chartPoints_usesXPositionsWithPadding() {
+        val points = chartPoints(listOf(1.0, 2.0, 3.0), 120f, 50f, 10f, xPositions = listOf(0f, 0.125f, 0.25f))
+        assertEquals(listOf(10f, 22.5f, 35f), points.map { it.first })
+    }
+
+    @Test fun chartPoints_xPositionsDoNotChangeY() {
+        val even = chartPoints(listOf(1.0, 2.0, 3.0), 120f, 50f, 10f)
+        val placed = chartPoints(listOf(1.0, 2.0, 3.0), 120f, 50f, 10f, xPositions = listOf(0f, 0.1f, 0.2f))
+        assertEquals(even.map { it.second }, placed.map { it.second })
+    }
+
+    @Test fun chartPoints_mismatchedOrMissingXPositionsSpreadEvenly() {
+        val even = chartPoints(listOf(1.0, 2.0, 3.0), 120f, 50f, 10f)
+        assertEquals(even, chartPoints(listOf(1.0, 2.0, 3.0), 120f, 50f, 10f, xPositions = listOf(0f, 0.5f)))
+        assertEquals(even, chartPoints(listOf(1.0, 2.0, 3.0), 120f, 50f, 10f, axis = null, xPositions = null))
+    }
+
     @Test fun stackLabels_keepsSeparateBoxes() {
         val boxes = listOf(LabelBox(0f, 50f, 40f), LabelBox(100f, 50f, 40f))
         assertEquals(listOf(50f, 50f), stackLabels(boxes, height = 10f))

@@ -1,6 +1,7 @@
 package com.tmfrl.marketwidget.data
 
 import android.content.Context
+import com.tmfrl.marketwidget.model.IntradaySeries
 import com.tmfrl.marketwidget.model.LIVE_SYMBOLS
 import com.tmfrl.marketwidget.model.LiveQuote
 import com.tmfrl.marketwidget.model.MarketData
@@ -12,6 +13,7 @@ import com.tmfrl.marketwidget.model.parseLiveQuote
 import com.tmfrl.marketwidget.model.parseNaverIndex
 import com.tmfrl.marketwidget.model.parseNaverMinutes
 import com.tmfrl.marketwidget.model.parseMarketData
+import com.tmfrl.marketwidget.model.withIntraday
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -101,17 +103,17 @@ class Repository(
         }
 
         private fun fetchNaver(code: String): LiveQuote? = orElse(null) {
-            parseNaverIndex(httpGet(NAVER_INDEX_URL.format(code)))?.copy(
+            parseNaverIndex(httpGet(NAVER_INDEX_URL.format(code)))?.withIntraday(
                 // 분봉이 실패해도 시세는 살린다
-                intraday = orElse(emptyList()) { parseNaverMinutes(httpGet(NAVER_MINUTE_URL.format(code))) },
+                orElse(IntradaySeries()) { parseNaverMinutes(httpGet(NAVER_MINUTE_URL.format(code))) },
             )
         }
 
         private fun fetchYahoo(symbol: String): LiveQuote? = orElse(null) {
             val encoded = URLEncoder.encode(symbol, "UTF-8")
-            parseLiveQuote(httpGet(YAHOO_URL.format(encoded)))?.copy(
+            parseLiveQuote(httpGet(YAHOO_URL.format(encoded)))?.withIntraday(
                 // 5분봉이 실패해도 시세는 살린다
-                intraday = orElse(emptyList()) { parseIntraday(httpGet(INTRADAY_URL.format(encoded))) },
+                orElse(IntradaySeries()) { parseIntraday(httpGet(INTRADAY_URL.format(encoded))) },
             )
         }
 

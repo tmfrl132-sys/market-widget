@@ -14,6 +14,14 @@ class PeriodTest {
         assertEquals(weekly, periodValues(daily, weekly, Period.FIVE_YEARS))
     }
 
+    @Test fun periodValues_slicesDatesLikeValues() {
+        val dates = daily.map { it.toString() }
+        val weeks = weekly.map { it.toString() }
+        assertEquals(dates.takeLast(22), periodValues(dates, weeks, Period.ONE_MONTH))
+        assertEquals(weeks, periodValues(dates, weeks, Period.FIVE_YEARS))
+        assertEquals(emptyList<String>(), periodValues(dates, weeks, Period.MAX))
+    }
+
     @Test fun parsePeriod_defaultsToThreeMonths() {
         assertEquals(Period.THREE_MONTHS, parsePeriod(null))
         assertEquals(Period.THREE_MONTHS, parsePeriod("bogus"))

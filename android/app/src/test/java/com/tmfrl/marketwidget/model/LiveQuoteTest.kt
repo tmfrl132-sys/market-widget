@@ -4,6 +4,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Test
+import java.time.LocalDateTime
+import java.util.TimeZone
 
 class LiveQuoteTest {
     // 2026-11-02, 2026-11-03 09:00 (UTC+9)
@@ -83,13 +85,69 @@ class LiveQuoteTest {
     @Test fun naverMinutes_everyFifthLatestDayKeepsLast() {
         val today = (0..6).map { minute("2026110409%02d00".format(it), "${100 + it}.0") }
         val text = (listOf(minute("20261103153000", "1.0")) + today).joinToString(",", "[", "]")
-        assertEquals(listOf(100.0, 105.0, 106.0), parseNaverMinutes(text))
+        assertEquals(listOf(100.0, 105.0, 106.0), parseNaverMinutes(text).values)
     }
 
     @Test fun naverMinutes_skipsEmptyAndHandlesNoData() {
         val text = listOf(minute("20261104090000", "100.0"), minute("20261104090100", "null")).joinToString(",", "[", "]")
-        assertEquals(listOf(100.0), parseNaverMinutes(text))
-        assertEquals(emptyList<Double>(), parseNaverMinutes("[]"))
+        assertEquals(listOf(100.0), parseNaverMinutes(text).values)
+        assertEquals(IntradaySeries(), parseNaverMinutes("[]"))
+    }
+
+    private fun seoul(day: Int, hour: Int, minute: Int = 0): Long =
+        LocalDateTime.of(2026, 11, day, hour, minute).atZone(SEOUL).toEpochSecond()
+
+    private fun minutes(vararg items: String) = items.joinToString(",", "[", "]")
+
+    @Test fun naverMinutes_timesFollowSameFilterAsValues() {
+        val today = (0..6).map { minute("2026110509%02d00".format(it), "${100 + it}.0") }
+        val text = (listOf(minute("20261104153000", "1.0")) + today).joinToString(",", "[", "]")
+        val series = parseNaverMinutes(text)
+        assertEquals(listOf(100.0, 105.0, 106.0), series.values)
+        assertEquals(listOf(seoul(5, 9), seoul(5, 9, 5), seoul(5, 9, 6)), series.times)
+    }
+
+    @Test fun naverMinutes_sessionIsNineToHalfPastThreeSeoul() {
+        val series = parseNaverMinutes(minutes(minute("20261105090000", "1.0"), minute("20261105100000", "2.0")))
+        assertEquals(seoul(5, 9), series.sessionStart)
+        assertEquals(seoul(5, 15, 30), series.sessionEnd)
+    }
+
+    @Test fun naverMinutes_closingAuctionBarKeepsSessionEnd() {
+        val series = parseNaverMinutes(minutes(minute("20261105090000", "1.0"), minute("20261105153200", "2.0")))
+        assertEquals(seoul(5, 15, 30), series.sessionEnd)
+        assertEquals(1f, sessionPosition(series.times.last(), series.sessionStart!!, series.sessionEnd!!), 0f)
+    }
+
+    @Test fun naverMinutes_barAtLimitKeepsSessionEnd() {
+        val series = parseNaverMinutes(minutes(minute("20261105090000", "1.0"), minute("20261105153500", "2.0")))
+        assertEquals(seoul(5, 15, 30), series.sessionEnd)
+    }
+
+    @Test fun naverMinutes_delayedOpenStretchesSessionEnd() {
+        // 수능일처럼 개장이 늦춰진 날은 15:35 뒤에도 봉이 있다
+        val series = parseNaverMinutes(minutes(minute("20261112100000", "1.0"), minute("20261112163000", "2.0")))
+        assertEquals(seoul(12, 9), series.sessionStart)
+        assertEquals(seoul(12, 16, 30), series.sessionEnd)
+    }
+
+    @Test fun naverMinutes_unreadableTimeKeepsValuesWithoutAxis() {
+        val partly = parseNaverMinutes(minutes(minute("20261105090000", "1.0"), minute("20261105xx0100", "2.0")))
+        assertEquals(IntradaySeries(listOf(1.0, 2.0)), partly)
+        val broken = parseNaverMinutes(minutes(minute("2026110509", "1.0")))
+        assertEquals(IntradaySeries(listOf(1.0)), broken)
+    }
+
+    @Test fun naverMinutes_doesNotDependOnDeviceTimeZone() {
+        val original = TimeZone.getDefault()
+        try {
+            TimeZone.setDefault(TimeZone.getTimeZone("America/New_York"))
+            val series = parseNaverMinutes(minutes(minute("20261105090000", "1.0"), minute("20261105100000", "2.0")))
+            assertEquals(seoul(5, 9), series.times.first())
+            assertEquals(seoul(5, 15, 30), series.sessionEnd)
+        } finally {
+            TimeZone.setDefault(original)
+        }
     }
 
     @Test fun naverCodes_onlyKoreanIndexes() {
@@ -173,8 +231,155 @@ class LiveQuoteTest {
     }
 
     @Test fun parseIntraday_dropsEmptyBars() {
-        assertEquals(listOf(99.0, 97.13), parseIntraday(chart("97.0", day2, listOf(day1, day2, day2 + 300), "[99.0, null, 97.126]")))
-        assertEquals(emptyList<Double>(), parseIntraday("""{"chart": {"result": null}}"""))
+        assertEquals(listOf(99.0, 97.13), parseIntraday(chart("97.0", day2, listOf(day1, day2, day2 + 300), "[99.0, null, 97.126]")).values)
+        assertEquals(IntradaySeries(), parseIntraday("""{"chart": {"result": null}}"""))
+    }
+
+    private fun intradayChart(periods: String?, stamps: List<Long>, closes: String): String {
+        val field = if (periods == null) "" else ""","tradingPeriods": $periods"""
+        return """{"chart": {"result": [{
+            "meta": {"regularMarketPrice": 1.0, "gmtoffset": 32400$field},
+            "timestamp": $stamps,
+            "indicators": {"quote": [{"close": $closes}]}
+        }]}}"""
+    }
+
+    private fun span(start: Long, end: Long) =
+        """{"timezone": "KST", "start": $start, "end": $end, "gmtoffset": 32400}"""
+
+    @Test fun parseIntraday_timesDropSameBarsAsValues() {
+        val series = parseIntraday(intradayChart(null, listOf(day1, day1 + 300, day1 + 600), "[99.0, null, 97.0]"))
+        assertEquals(listOf(99.0, 97.0), series.values)
+        assertEquals(listOf(day1, day1 + 600), series.times)
+    }
+
+    @Test fun parseIntraday_readsTradingPeriods() {
+        val series = parseIntraday(intradayChart("[[${span(day1, day1 + 21600)}]]", listOf(day1, day1 + 300), "[1.0, 2.0]"))
+        assertEquals(day1, series.sessionStart)
+        assertEquals(day1 + 21600, series.sessionEnd)
+    }
+
+    @Test fun parseIntraday_manyPeriodsUseFirstStartAndLastEnd() {
+        val periods = "[[${span(day1, day1 + 100)},${span(day1 + 200, day1 + 300)}],[${span(day1 + 400, day1 + 500)}]]"
+        val series = parseIntraday(intradayChart(periods, listOf(day1, day1 + 300), "[1.0, 2.0]"))
+        assertEquals(day1, series.sessionStart)
+        assertEquals(day1 + 500, series.sessionEnd)
+    }
+
+    @Test fun parseIntraday_otherPeriodShapesMeanUnknownSession() {
+        val shapes = listOf(
+            """{"regular": [[${span(day1, day1 + 100)}]]}""",
+            "[${span(day1, day1 + 100)}]",
+            "[[]]",
+            "[]",
+            "null",
+            "\"closed\"",
+            """[[{"start": $day1}]]""",
+            """[[{"start": "x", "end": {}}]]""",
+        )
+        shapes.forEach { shape ->
+            val series = parseIntraday(intradayChart(shape, listOf(day1, day1 + 300), "[1.0, 2.0]"))
+            assertEquals(shape, listOf(1.0, 2.0), series.values)
+            assertEquals(shape, listOf(day1, day1 + 300), series.times)
+            assertNull(shape, series.sessionStart)
+            assertNull(shape, series.sessionEnd)
+        }
+    }
+
+    @Test fun parseLiveQuote_survivesOtherPeriodShape() {
+        val text = intradayChart("""{"regular": []}""", listOf(day1, day2), "[100.0, 95.0]")
+        assertEquals(1.0, parseLiveQuote(text)!!.price, 0.0)
+    }
+
+    @Test fun parseIntraday_timestampLengthMismatchKeepsValues() {
+        val series = parseIntraday(intradayChart(null, listOf(day1), "[1.0, null, 2.0]"))
+        assertEquals(listOf(1.0, 2.0), series.values)
+        assertEquals(emptyList<Long>(), series.times)
+    }
+
+    @Test fun withIntraday_copiesAllFourFields() {
+        val live = LiveQuote(1.0, 0.0, 0.0, 1.0).withIntraday(IntradaySeries(listOf(1.0), listOf(5L), 2L, 9L))
+        assertEquals(listOf(1.0), live.intraday)
+        assertEquals(listOf(5L), live.intradayTimes)
+        assertEquals(2L, live.sessionStart)
+        assertEquals(9L, live.sessionEnd)
+    }
+
+    @Test fun apply_replacesIntradayFieldsTogetherAndKeepsLength() {
+        val base = withMax(peak = 200.0, mdd = -60.0).copy(
+            intraday = listOf(1.0), intraday_times = listOf(1L), session_start = 1L, session_end = 2L,
+        )
+        val live = LiveQuote(
+            95.0, -5.0, -5.0, 100.0,
+            intraday = listOf(99.0, 96.0), intradayTimes = listOf(10L, 20L), sessionStart = 5L, sessionEnd = 50L,
+        )
+        val quote = merged(base, live)
+        assertEquals(listOf(99.0, 95.0), quote.intraday)
+        assertEquals(listOf(10L, 20L), quote.intraday_times)
+        assertEquals(5L, quote.session_start)
+        assertEquals(50L, quote.session_end)
+    }
+
+    @Test fun apply_keepsIntradayFieldsTogetherWhenNoneReceived() {
+        val base = withMax(peak = 200.0, mdd = -60.0).copy(
+            intraday = listOf(1.0, 2.0), intraday_times = listOf(1L, 2L), session_start = 1L, session_end = 3L,
+        )
+        val quote = merged(base, LiveQuote(95.0, -5.0, -5.0, 100.0))
+        assertEquals(listOf(1.0, 2.0), quote.intraday)
+        assertEquals(listOf(1L, 2L), quote.intraday_times)
+        assertEquals(1L, quote.session_start)
+        assertEquals(3L, quote.session_end)
+    }
+
+    @Test fun apply_newIntradayWithoutTimesClearsOldTimes() {
+        // 값만 새로 받으면 옛 시각은 다른 봉의 시각이다
+        val base = withMax(peak = 200.0, mdd = -60.0).copy(
+            intraday = listOf(1.0, 2.0), intraday_times = listOf(1L, 2L), session_start = 1L, session_end = 3L,
+        )
+        val quote = merged(base, LiveQuote(95.0, -5.0, -5.0, 100.0, intraday = listOf(9.0, 8.0)))
+        assertEquals(emptyList<Long>(), quote.intraday_times)
+        assertNull(quote.session_start)
+        assertNull(quote.session_end)
+    }
+
+    private fun withDates(daily: List<Double>, dates: List<String>, live: LiveQuote, updatedAt: String): Quote {
+        val base = Quote("KS11", "코스피", 100.0, 1.0, 0.1, daily = daily, daily_dates = dates)
+        return applyLiveQuotes(MarketData("old", listOf(base), emptyList()), mapOf("KS11" to live), updatedAt).quotes[0]
+    }
+
+    private val appendLive = LiveQuote(95.0, -5.0, -5.0, 100.0)
+
+    @Test fun apply_appendsUpdatedDateWhenDailyGrows() {
+        val quote = withDates(listOf(90.0, 100.0), listOf("2026-11-03", "2026-11-04"), appendLive, "2026-11-05T10:00:00+09:00")
+        assertEquals(listOf(90.0, 100.0, 95.0), quote.daily)
+        assertEquals(listOf("2026-11-03", "2026-11-04", "2026-11-05"), quote.daily_dates)
+    }
+
+    @Test fun apply_keepsDatesWhenDailyLastIsReplaced() {
+        val dates = listOf("2026-11-04", "2026-11-05")
+        val quote = withDates(listOf(100.0, 98.0), dates, appendLive, "2026-11-05T10:00:00+09:00")
+        assertEquals(listOf(100.0, 95.0), quote.daily)
+        assertEquals(dates, quote.daily_dates)
+    }
+
+    @Test fun apply_doesNotAppendDateToMisalignedOrEmptyDates() {
+        val empty = withDates(listOf(90.0, 100.0), emptyList(), appendLive, "2026-11-05T10:00:00+09:00")
+        assertEquals(emptyList<String>(), empty.daily_dates)
+        val short = withDates(listOf(90.0, 100.0), listOf("2026-11-04"), appendLive, "2026-11-05T10:00:00+09:00")
+        assertEquals(listOf("2026-11-04"), short.daily_dates)
+    }
+
+    @Test fun apply_keepsWeeklyAndMaxDatesAligned() {
+        val base = Quote(
+            "KS11", "코스피", 100.0, 1.0, 0.1,
+            weekly = listOf(1.0, 2.0), weekly_dates = listOf("2026-10-26", "2026-11-02"),
+            max_closes = listOf(3.0, 4.0), max_dates = listOf("1996-12-11", "2026-11-05"),
+        )
+        val quote = merged(base, appendLive)
+        assertEquals(quote.weekly.size, quote.weekly_dates.size)
+        assertEquals(quote.max_closes.size, quote.max_dates.size)
+        assertEquals(base.weekly_dates, quote.weekly_dates)
+        assertEquals(base.max_dates, quote.max_dates)
     }
 
     @Test fun apply_leavesMissingChartsEmpty() {

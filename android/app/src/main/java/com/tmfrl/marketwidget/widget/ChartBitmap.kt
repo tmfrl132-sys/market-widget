@@ -8,9 +8,11 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Shader
 import com.tmfrl.marketwidget.model.LabelBox
+import com.tmfrl.marketwidget.model.XTick
 import com.tmfrl.marketwidget.model.YAxis
 import com.tmfrl.marketwidget.model.chartPoints
 import com.tmfrl.marketwidget.model.formatPrice
+import com.tmfrl.marketwidget.model.placeXLabels
 import com.tmfrl.marketwidget.model.stackLabels
 import com.tmfrl.marketwidget.model.yAxisFor
 import com.tmfrl.marketwidget.model.yPosition
@@ -22,7 +24,8 @@ import com.tmfrl.marketwidget.model.yPosition
  * 아래 인자는 detailed일 때만 쓴다.
  * baseline은 점선 값(없으면 점선 없음), baselineLabel은 점선 문구, axisLabel은 세로축 숫자 형식,
  * areaBase는 영역을 채울 기준값(없으면 차트 바닥까지), fixedAxis는 정해 둔 세로축(없으면 값으로 계산),
- * marks는 점에 붙일 문구(값 목록 위치와 문구).
+ * marks는 점에 붙일 문구(값 목록 위치와 문구),
+ * xTicks는 가로축 눈금(있으면 아래쪽에 글자 띠를 잡는다), xPositions는 점마다의 가로 위치 0~1(없으면 고르게 놓는다).
  */
 fun renderLine(
     values: List<Double>,
@@ -40,6 +43,8 @@ fun renderLine(
     areaBase: Double? = null,
     fixedAxis: YAxis? = null,
     marks: List<Pair<Int, String>> = emptyList(),
+    xTicks: List<XTick> = emptyList(),
+    xPositions: List<Float>? = null,
 ): Bitmap {
     val w = widthPx.coerceAtLeast(2)
     val h = heightPx.coerceAtLeast(2)
@@ -56,13 +61,17 @@ fun renderLine(
     // 세로축 숫자가 들어갈 오른쪽 칸. 선이 숫자와 겹치지 않게 그림 영역과 나눈다.
     val gutter = axis?.ticks?.maxOf { text.measureText(axisLabel(it)) }?.plus(textPx * 0.6f) ?: 0f
     val plotW = (w - gutter).coerceAtLeast(2f)
+    // 가로축 글자가 들어갈 아래쪽 띠. 세로 계산은 띠를 뺀 높이 안에서 한다. 작은 차트는 눈금과 가로 위치를 무시한다.
+    val ticks = if (detailed) xTicks else emptyList()
+    val band = if (ticks.isEmpty()) 0f else textPx * X_BAND_LINES
+    val plotH = (h - band).coerceAtLeast(2f)
 
     // 점과 위아래 끝 눈금 숫자가 잘리지 않게 여백을 둔다
     val pad = if (detailed) maxOf(strokePx * 3, textPx * 0.6f) else strokePx
-    val points = chartPoints(values, plotW, h.toFloat(), pad, axis)
+    val points = chartPoints(values, plotW, plotH, pad, axis, if (detailed) xPositions else null)
     if (points.isEmpty()) return bitmap
 
-    if (axis != null) drawAxis(canvas, axis, axisLabel, text, plotW, w.toFloat(), h.toFloat(), pad, strokePx)
+    if (axis != null) drawAxis(canvas, axis, axisLabel, text, plotW, w.toFloat(), plotH, pad, strokePx)
 
     val line = Path().apply {
         moveTo(points[0].first, points[0].second)
@@ -70,9 +79,9 @@ fun renderLine(
     }
     if (detailed) {
         val floor = if (axis != null && areaBase != null) {
-            yPosition(areaBase, axis.min, axis.max, h.toFloat(), pad)
+            yPosition(areaBase, axis.min, axis.max, plotH, pad)
         } else {
-            h - pad
+            plotH - pad
         }
         val area = Path(line).apply {
             lineTo(points.last().first, floor)
@@ -83,10 +92,10 @@ fun renderLine(
         val bottom = lineColor and 0x00FFFFFF
         canvas.drawPath(area, Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
-            shader = LinearGradient(0f, 0f, 0f, h.toFloat(), top, bottom, Shader.TileMode.CLAMP)
+            shader = LinearGradient(0f, 0f, 0f, plotH, top, bottom, Shader.TileMode.CLAMP)
         })
     }
-    if (axis != null && baseline != null) drawBaseline(canvas, baseline, axis, text, plotW, h.toFloat(), pad, strokePx)
+    if (axis != null && baseline != null) drawBaseline(canvas, baseline, axis, text, plotW, plotH, pad, strokePx)
     canvas.drawPath(line, Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         color = lineColor
@@ -100,12 +109,21 @@ fun renderLine(
         canvas.drawCircle(x, y, strokePx * 2.2f, dot)
         canvas.drawCircle(x, y, strokePx * 1.1f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = backgroundColor })
         if (axis != null && baseline != null) {
-            drawBaselineLabel(canvas, baselineLabel, baseline, values.last(), axis, text, backgroundColor, plotW, h.toFloat(), pad)
+            drawBaselineLabel(canvas, baselineLabel, baseline, values.last(), axis, text, backgroundColor, plotW, plotH, pad)
         }
         drawMarks(canvas, marks.filter { (i, _) -> i in points.indices }, points, text, backgroundColor, plotW, strokePx)
+        val baselineY = h - textPx * X_BAND_BOTTOM_LINES
+        placeXLabels(ticks, plotW, pad, textPx * X_LABEL_GAP_LINES) { text.measureText(it) }.forEach { label ->
+            canvas.drawText(label.text, label.left, baselineY, text)
+        }
     }
     return bitmap
 }
+
+/** 가로축 글자 띠의 높이, 글자 아래 여백, 글자 사이 최소 간격. 글자 크기의 배수다. */
+private const val X_BAND_LINES = 1.4f
+private const val X_BAND_BOTTOM_LINES = 0.25f
+private const val X_LABEL_GAP_LINES = 0.4f
 
 /** 사건 표시. 점을 찍고 그 위에 문구를 둔다. 문구끼리 겹치면 위로 올린다. */
 private fun drawMarks(

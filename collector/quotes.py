@@ -44,6 +44,14 @@ def chart_closes(payload: dict) -> list[float]:
     return [round(c, 2) for c in closes if c is not None]
 
 
+def chart_dates(payload: dict) -> list[str]:
+    """chart_closes와 같은 봉의 시장 현지 날짜(YYYY-MM-DD). null 종가 봉은 날짜도 뺀다."""
+    result = payload["chart"]["result"][0]
+    offset = result["meta"].get("gmtoffset", 0)
+    closes = result["indicators"]["quote"][0]["close"]
+    return [_local_date(ts, offset).isoformat() for ts, c in zip(result["timestamp"], closes) if c is not None]
+
+
 def _local_date(ts: int, offset: int):
     return datetime.fromtimestamp(ts + offset, timezone.utc).date()
 
@@ -65,18 +73,24 @@ def _bucket_size(count: int) -> int:
     return -(-count // ((MAX_POINTS - 2) // 2))
 
 
-def thin_closes(closes: list[float]) -> list[float]:
-    """차트용으로 점을 줄인다. 묶음의 최저·최고를 시간 순서로 남겨 고점과 바닥이 사라지지 않게 하고, 처음·마지막 값은 지킨다."""
+def thin_indices(closes: list[float]) -> list[int]:
+    """차트용으로 남길 점의 위치. 묶음의 최저·최고를 시간 순서로 남겨 고점과 바닥이 사라지지 않게 하고, 처음·마지막 점은 지킨다.
+    처음·마지막 점이 묶음 점과 겹치면 같은 위치가 두 번 들어간다."""
     size = _bucket_size(len(closes))
     if size == 1:
-        return closes
-    points = [closes[0]]
+        return list(range(len(closes)))
+    picks = [0]
     for start in range(0, len(closes), size):
         chunk = closes[start:start + size]
         low, high = chunk.index(min(chunk)), chunk.index(max(chunk))
-        points += [chunk[i] for i in sorted({low, high})]
-    points.append(closes[-1])
-    return points
+        picks += [start + i for i in sorted({low, high})]
+    picks.append(len(closes) - 1)
+    return picks
+
+
+def thin_closes(closes: list[float]) -> list[float]:
+    """thin_indices가 고른 위치의 값."""
+    return [closes[i] for i in thin_indices(closes)]
 
 
 def event_marks(id_: str, dates: list, depths: list[float], size: int) -> list[dict]:
@@ -103,8 +117,10 @@ def max_fields(payload: dict, with_drawdown: bool, id_: str = "") -> dict:
     offset = result["meta"].get("gmtoffset", 0)
     size = _bucket_size(len(closes))
     chunks = range(0, len(closes), size)
+    picks = thin_indices(closes)
     fields = {
-        "max_closes": [round(c, 2) for c in thin_closes(closes)],
+        "max_closes": [round(closes[i], 2) for i in picks],
+        "max_dates": [_local_date(bars[i][0], offset).isoformat() for i in picks],
         "max_drawdowns": [],
         "max_events": [],
         "max_start": _local_date(bars[0][0], offset).year,
@@ -137,13 +153,22 @@ def _get_json(url: str, get) -> dict:
             time.sleep(1)
 
 
-def _fetch_weekly(symbol: str, get, prev_item: dict) -> list[float]:
-    """5년 주봉. 실패해도 시세는 살리고 직전 주봉을 그대로 쓴다."""
+def _kept(prev_item: dict, values_key: str, dates_key: str) -> tuple[list, list]:
+    """직전 값과 날짜. 날짜가 없거나 길이가 어긋나면 날짜만 비워 둔다(위젯은 날짜가 없으면 눈금을 안 그린다)."""
+    values = prev_item.get(values_key, [])
+    dates = prev_item.get(dates_key, [])
+    return values, (dates if len(dates) == len(values) else [])
+
+
+def _fetch_weekly(symbol: str, get, prev_item: dict) -> dict:
+    """5년 주봉. 실패해도 시세는 살리고 직전 주봉과 날짜를 그대로 쓴다."""
     try:
-        return chart_closes(_get_chart(symbol, get, "5y", "1wk"))
+        payload = _get_chart(symbol, get, "5y", "1wk")
+        return {"weekly": chart_closes(payload), "weekly_dates": chart_dates(payload)}
     except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as e:
         log.warning("%s 주봉 실패: %s", symbol, e)
-        return prev_item.get("weekly", [])
+        values, dates = _kept(prev_item, "weekly", "weekly_dates")
+        return {"weekly": values, "weekly_dates": dates}
 
 
 def _fetch_max(id_: str, symbol: str, get, prev_item: dict) -> dict:
@@ -153,8 +178,10 @@ def _fetch_max(id_: str, symbol: str, get, prev_item: dict) -> dict:
         return max_fields(_get_json(url, get), id_ not in NO_DRAWDOWN, id_)
     except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as e:
         log.warning("%s 전체 기간 실패: %s", symbol, e)
+        values, dates = _kept(prev_item, "max_closes", "max_dates")
         return {
-            "max_closes": prev_item.get("max_closes", []),
+            "max_closes": values,
+            "max_dates": dates,
             "max_drawdowns": prev_item.get("max_drawdowns", []),
             "max_events": prev_item.get("max_events", []),
             "max_start": prev_item.get("max_start"),
@@ -180,7 +207,8 @@ def fetch_quotes(prev: dict[str, dict], get=requests.get) -> list[dict]:
                 "history": history,
                 "chart": daily[-OLD_APP_CHART_POINTS:],
                 "daily": daily,
-                "weekly": _fetch_weekly(symbol, get, prev.get(id_, {})),
+                "daily_dates": chart_dates(payload),
+                **_fetch_weekly(symbol, get, prev.get(id_, {})),
                 **_fetch_max(id_, symbol, get, prev.get(id_, {})),
                 "stale": False,
             })
@@ -188,10 +216,11 @@ def fetch_quotes(prev: dict[str, dict], get=requests.get) -> list[dict]:
             log.warning("%s 시세 실패: %s", symbol, e)
             old = prev.get(id_)
             if old:
-                items.append({**old, "stale": True})
+                items.append({"daily_dates": [], "weekly_dates": [], "max_dates": [], **old, "stale": True})
             else:
                 items.append({"id": id_, "name": name, "price": None, "change": None,
                               "change_pct": None, "history": [], "chart": [],
-                              "daily": [], "weekly": [], "max_closes": [], "max_drawdowns": [],
+                              "daily": [], "daily_dates": [], "weekly": [], "weekly_dates": [],
+                              "max_closes": [], "max_dates": [], "max_drawdowns": [],
                               "max_events": [], "max_start": None, "peak": None, "mdd": None, "stale": True})
     return items

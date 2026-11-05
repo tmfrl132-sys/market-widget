@@ -30,6 +30,12 @@ data class Quote(
     val mdd: Double? = null, // 전체 기간 최대 낙폭 %. 낙폭을 안 쓰는 지표는 null
     val intraday: List<Double> = emptyList(), // 오늘 5분봉 종가. 기기가 직접 받는다
     val prev_close: Double? = null, // 전일 종가. 기기가 직접 받는다
+    val daily_dates: List<String> = emptyList(), // daily와 1:1, YYYY-MM-DD
+    val weekly_dates: List<String> = emptyList(), // weekly와 1:1, YYYY-MM-DD
+    val max_dates: List<String> = emptyList(), // max_closes와 1:1, YYYY-MM-DD
+    val intraday_times: List<Long> = emptyList(), // intraday와 1:1, 초 단위 epoch. 기기가 직접 받는다
+    val session_start: Long? = null, // 오늘 차트의 장 시작, 초 단위 epoch. 기기가 직접 받는다
+    val session_end: Long? = null, // 오늘 차트의 장 끝, 초 단위 epoch. 기기가 직접 받는다
 
     val stale: Boolean = false,
 )

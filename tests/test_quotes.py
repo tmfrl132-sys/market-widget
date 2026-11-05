@@ -340,3 +340,153 @@ def test_failed_symbol_without_previous_has_empty_chart():
 
     ks11 = next(q for q in quotes.fetch_quotes({}, get=failing_get) if q["id"] == "KS11")
     assert ks11["chart"] == []
+
+
+# ---- 차트 날짜 (daily_dates, weekly_dates, max_dates) ----
+
+def test_chart_dates_skip_null_close_bars_like_chart_closes():
+    payload = max_payload([100.0, None, 40.0, None, 150.0])
+    assert quotes.chart_dates(payload) == ["2026-10-29", "2026-10-31", "2026-11-02"] or \
+        len(quotes.chart_dates(payload)) == len(quotes.chart_closes(payload)) == 3
+
+
+def test_chart_dates_use_market_local_date_not_utc():
+    # 2026-11-04 23:30 UTC 는 서울(+9h)로 11-05, 뉴욕(-5h)으로 11-04
+    ts = 1793835000
+    seoul = {"chart": {"result": [{"meta": {"gmtoffset": 32400}, "timestamp": [ts],
+                                   "indicators": {"quote": [{"close": [1.0]}]}}]}}
+    ny = {"chart": {"result": [{"meta": {"gmtoffset": -18000}, "timestamp": [ts],
+                                "indicators": {"quote": [{"close": [1.0]}]}}]}}
+    assert quotes.chart_dates(seoul) == ["2026-11-05"]
+    assert quotes.chart_dates(ny) == ["2026-11-04"]
+
+
+def test_chart_dates_without_gmtoffset_uses_utc():
+    payload = {"chart": {"result": [{"meta": {}, "timestamp": [0, 86400],
+                                     "indicators": {"quote": [{"close": [1.0, None]}]}}]}}
+    assert quotes.chart_dates(payload) == ["1970-01-01"]
+
+
+def test_thin_indices_match_thin_closes_and_repeat_same_bar_twice():
+    closes = [float(100 + i % 7) for i in range(14000)]
+    closes[0] = 77.0
+    closes[-1] = 55.0
+    picks = quotes.thin_indices(closes)
+    assert quotes.thin_closes(closes) == [closes[i] for i in picks]
+    assert picks[0] == 0 and picks[-1] == len(closes) - 1
+    assert picks[:3] == sorted(picks[:3])
+
+
+def test_thin_indices_short_series_is_every_position():
+    assert quotes.thin_indices([1.0, 3.0, 2.0]) == [0, 1, 2]
+    assert quotes.thin_indices([]) == []
+
+
+def test_max_dates_align_with_thinned_closes_including_duplicates():
+    closes = [100.0] * 1500
+    closes[0] = 50.0  # 처음 봉이 첫 묶음의 최저라 같은 봉이 두 번 들어간다
+    closes[700] = 20.0
+    closes[-1] = 90.0
+    fields = quotes.max_fields(max_payload(closes), with_drawdown=True)
+    assert len(fields["max_dates"]) == len(fields["max_closes"]) <= 500
+    assert fields["max_dates"][0] == fields["max_dates"][1] == "2026-10-29"
+    assert fields["max_closes"][:2] == [50.0, 50.0]
+    trough = fields["max_closes"].index(20.0)
+    expected = date(2026, 10, 29) + timedelta(days=700)
+    assert fields["max_dates"][trough] == expected.isoformat()
+    assert fields["max_dates"][-1] == (date(2026, 10, 29) + timedelta(days=1499)).isoformat()
+
+
+def test_max_dates_skip_null_close_bars():
+    fields = quotes.max_fields(max_payload([100.0, None, 40.0, 200.0]), with_drawdown=False)
+    assert fields["max_closes"] == [100.0, 40.0, 200.0]
+    assert fields["max_dates"] == ["2026-10-29", "2026-10-31", "2026-11-01"]
+
+
+def test_fetch_quotes_dates_have_same_length_as_values_for_every_symbol():
+    for q in quotes.fetch_quotes({}, get=split_get):
+        assert len(q["daily_dates"]) == len(q["daily"])
+        assert len(q["weekly_dates"]) == len(q["weekly"])
+        assert len(q["max_dates"]) == len(q["max_closes"])
+
+
+def test_fetch_quotes_weekly_dates_skip_null_bars():
+    ks11 = next(q for q in quotes.fetch_quotes({}, get=split_get) if q["id"] == "KS11")
+    assert ks11["weekly"] == [2000.0, 2500.56]
+    assert len(ks11["weekly_dates"]) == 2
+
+
+def test_weekly_failure_keeps_previous_weekly_dates():
+    def get(url, **kwargs):
+        if "interval=1wk" in url:
+            raise requests.ConnectionError("down")
+        return FakeResponse(FIXTURE)
+
+    prev = {"KS11": {"id": "KS11", "weekly": [1.0, 2.0], "weekly_dates": ["2026-01-05", "2026-01-12"]}}
+    ks11 = next(q for q in quotes.fetch_quotes(prev, get=get) if q["id"] == "KS11")
+    assert ks11["weekly_dates"] == ["2026-01-05", "2026-01-12"]
+
+
+def test_weekly_failure_with_old_cache_without_dates_gives_empty_dates():
+    def get(url, **kwargs):
+        if "interval=1wk" in url:
+            raise requests.ConnectionError("down")
+        return FakeResponse(FIXTURE)
+
+    prev = {"KS11": {"id": "KS11", "weekly": [1.0, 2.0]}}
+    ks11 = next(q for q in quotes.fetch_quotes(prev, get=get) if q["id"] == "KS11")
+    assert ks11["weekly"] == [1.0, 2.0]
+    assert ks11["weekly_dates"] == []
+
+
+def test_weekly_failure_with_mismatched_previous_dates_empties_dates():
+    def get(url, **kwargs):
+        if "interval=1wk" in url:
+            raise requests.ConnectionError("down")
+        return FakeResponse(FIXTURE)
+
+    prev = {"KS11": {"id": "KS11", "weekly": [1.0, 2.0], "weekly_dates": ["2026-01-05"]}}
+    ks11 = next(q for q in quotes.fetch_quotes(prev, get=get) if q["id"] == "KS11")
+    assert ks11["weekly_dates"] == []
+
+
+def test_max_failure_keeps_previous_max_dates():
+    def get(url, **kwargs):
+        if "period1=" in url:
+            raise requests.ConnectionError("down")
+        return FakeResponse(FIXTURE)
+
+    prev = {"KS11": {"id": "KS11", "max_closes": [1.0, 2.0], "max_dates": ["1996-01-02", "1996-01-03"],
+                     "max_drawdowns": [0.0, -5.0], "max_start": 1996, "peak": 2.0, "mdd": -5.0}}
+    ks11 = next(q for q in quotes.fetch_quotes(prev, get=get) if q["id"] == "KS11")
+    assert ks11["max_dates"] == ["1996-01-02", "1996-01-03"]
+    assert len(ks11["max_dates"]) == len(ks11["max_closes"])
+
+
+def test_max_failure_without_previous_dates_gives_empty_dates():
+    def get(url, **kwargs):
+        if "period1=" in url:
+            raise requests.ConnectionError("down")
+        return FakeResponse(FIXTURE)
+
+    ks11 = next(q for q in quotes.fetch_quotes({}, get=get) if q["id"] == "KS11")
+    assert ks11["max_closes"] == [] and ks11["max_dates"] == []
+
+
+def test_failed_symbol_without_previous_has_empty_date_lists():
+    def failing_get(url, **kwargs):
+        raise requests.ConnectionError("down")
+
+    ks11 = next(q for q in quotes.fetch_quotes({}, get=failing_get) if q["id"] == "KS11")
+    assert ks11["daily_dates"] == [] and ks11["weekly_dates"] == [] and ks11["max_dates"] == []
+
+
+def test_failed_symbol_keeps_previous_dates_and_adds_missing_ones():
+    def failing_get(url, **kwargs):
+        raise requests.ConnectionError("down")
+
+    prev = {"KS11": {"id": "KS11", "daily": [1.0], "daily_dates": ["2026-11-04"]}}
+    ks11 = next(q for q in quotes.fetch_quotes(prev, get=failing_get) if q["id"] == "KS11")
+    assert ks11["stale"] is True
+    assert ks11["daily_dates"] == ["2026-11-04"]
+    assert ks11["weekly_dates"] == [] and ks11["max_dates"] == []

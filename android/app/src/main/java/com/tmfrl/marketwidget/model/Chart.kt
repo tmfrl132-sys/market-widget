@@ -64,15 +64,21 @@ fun yPosition(value: Double, min: Double, max: Double, height: Float, pad: Float
 /**
  * 값 목록을 width×height 영역의 좌표로 바꾼다. 위가 큰 값이다. 값이 2개 미만이면 빈 목록.
  * axis가 있으면 그 범위로, 없으면 값의 최저~최고로 맞춘다.
+ * xPositions(0~1)의 개수가 값과 같으면 그 위치에 놓고, 아니면 가로 전체에 고르게 놓는다.
  */
 fun chartPoints(
     values: List<Double>, width: Float, height: Float, pad: Float, axis: YAxis? = null,
+    xPositions: List<Float>? = null,
 ): List<Pair<Float, Float>> {
     if (values.size < 2) return emptyList()
     val min = axis?.min ?: values.min()
     val max = axis?.max ?: values.max()
     val stepX = (width - 2 * pad) / (values.size - 1)
-    return values.mapIndexed { i, v -> (pad + i * stepX) to yPosition(v, min, max, height, pad) }
+    val placed = xPositions?.takeIf { it.size == values.size }
+    return values.mapIndexed { i, v ->
+        val x = if (placed != null) pad + placed[i] * (width - 2 * pad) else pad + i * stepX
+        x to yPosition(v, min, max, height, pad)
+    }
 }
 
 data class ChartSummary(val min: Double, val max: Double, val change: Double, val changePct: Double)

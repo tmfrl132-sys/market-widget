@@ -81,7 +81,9 @@ import java.time.ZonedDateTime
 import androidx.glance.appwidget.RadioButton
 import androidx.glance.appwidget.RadioButtonDefaults
 import com.tmfrl.marketwidget.model.Period
+import com.tmfrl.marketwidget.model.XTick
 import com.tmfrl.marketwidget.model.chartValues
+import com.tmfrl.marketwidget.model.chartXAxis
 import com.tmfrl.marketwidget.model.parsePeriod
 import com.tmfrl.marketwidget.model.eventRows
 import com.tmfrl.marketwidget.model.fitBitmap
@@ -411,12 +413,16 @@ private fun ChartPanel(
     // 로그는 첫 값 대비 배수의 지수로 그린다. 점선 문구에는 실제 값을 그대로 쓴다.
     val logChart = if (logScale && period.supportsLog) logChartFor(values) else null
     val axisLabel: (Double) -> String = if (logChart != null) ::formatPowerOfTen else ::formatPrice
+    // 로그 값도 개수가 같아 같은 눈금을 쓴다. 낙폭 차트를 쌓으면 맨 아래 낙폭 차트에만 눈금을 그린다.
+    val xAxis = chartXAxis(quote, period)
     val bitmap = detailBitmap(
         logChart?.values ?: values, color, fullW, priceHeight.toPx(density),
         if (showDrawdownChart) MAX_CHART_PIXELS * 6 / 10 else MAX_CHART_PIXELS, density,
         if (logChart != null) 0.0 else baseline,
         "${if (today) "전일" else "시작"} ${formatPrice(baseline)}",
         axisLabel, null, logChart?.axis,
+        xTicks = if (showDrawdownChart) emptyList() else xAxis.ticks,
+        xPositions = xAxis.positions,
     )
     // 차트나 머리줄을 누르면 닫는다. 기간 선택 줄은 따로 눌린다.
     val close = actionRunCallback<SelectQuoteAction>(actionParametersOf(QUOTE_ID to quote.id))
@@ -458,6 +464,7 @@ private fun ChartPanel(
                 quote.max_drawdowns, DOWN, fullW, drawdownHeight.toPx(density), MAX_CHART_PIXELS * 4 / 10, density,
                 null, "", ::formatAxisPct, 0.0,
                 marks = quote.max_events.map { it.index to "${it.label} ${formatDrawdown(it.depth)}" },
+                xTicks = xAxis.ticks,
             )
             Image(
                 provider = ImageProvider(drawdownBitmap),
@@ -481,6 +488,8 @@ private fun detailBitmap(
     values: List<Double>, color: Color, fullW: Int, fullH: Int, maxPixels: Int, density: Float,
     baseline: Double?, baselineLabel: String, axisLabel: (Double) -> String, areaBase: Double?, fixedAxis: YAxis? = null,
     marks: List<Pair<Int, String>> = emptyList(),
+    xTicks: List<XTick> = emptyList(),
+    xPositions: List<Float>? = null,
 ): Bitmap {
     val (bw, bh) = fitBitmap(fullW, fullH, maxPixels)
     val scale = bw.toFloat() / fullW
@@ -500,6 +509,8 @@ private fun detailBitmap(
         areaBase = areaBase,
         fixedAxis = fixedAxis,
         marks = marks,
+        xTicks = xTicks,
+        xPositions = xPositions,
     )
 }
 
