@@ -1,5 +1,5 @@
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -346,8 +346,8 @@ def test_failed_symbol_without_previous_has_empty_chart():
 
 def test_chart_dates_skip_null_close_bars_like_chart_closes():
     payload = max_payload([100.0, None, 40.0, None, 150.0])
-    assert quotes.chart_dates(payload) == ["2026-10-29", "2026-10-31", "2026-11-02"] or \
-        len(quotes.chart_dates(payload)) == len(quotes.chart_closes(payload)) == 3
+    assert quotes.chart_dates(payload) == ["2026-10-29", "2026-10-31", "2026-11-02"]
+    assert len(quotes.chart_dates(payload)) == len(quotes.chart_closes(payload)) == 3
 
 
 def test_chart_dates_use_market_local_date_not_utc():
@@ -365,6 +365,60 @@ def test_chart_dates_without_gmtoffset_uses_utc():
     payload = {"chart": {"result": [{"meta": {}, "timestamp": [0, 86400],
                                      "indicators": {"quote": [{"close": [1.0, None]}]}}]}}
     assert quotes.chart_dates(payload) == ["1970-01-01"]
+
+
+def utc_ts(*args):
+    return int(datetime(*args, tzinfo=timezone.utc).timestamp())
+
+
+def tz_payload(stamps, meta):
+    return {"chart": {"result": [{"meta": meta, "timestamp": stamps,
+                                  "indicators": {"quote": [{"close": [1.0] * len(stamps)}]}}]}}
+
+
+def test_chart_dates_new_york_summer_bar_is_monday_not_sunday():
+    # 2026-07-06 04:00 UTC = 뉴욕 월요일 00:00(EDT). 지금 오프셋(-18000, 표준시)을 그대로 쓰면 일요일이 된다
+    payload = tz_payload([utc_ts(2026, 7, 6, 4)],
+                         {"gmtoffset": -18000, "exchangeTimezoneName": "America/New_York"})
+    assert quotes.chart_dates(payload) == ["2026-07-06"]
+
+
+def test_chart_dates_new_york_winter_and_summer_bars_in_one_series():
+    stamps = [utc_ts(2026, 1, 12, 5), utc_ts(2026, 7, 6, 4), utc_ts(2026, 11, 2, 5)]  # EST, EDT, EST(서머타임 끝난 뒤)
+    payload = tz_payload(stamps, {"gmtoffset": -18000, "exchangeTimezoneName": "America/New_York"})
+    assert quotes.chart_dates(payload) == ["2026-01-12", "2026-07-06", "2026-11-02"]
+
+
+def test_chart_dates_london_krw_shape_summer_bar_at_2300_utc():
+    # 원/달러 봉은 런던 자정에 시작한다. 여름에는 전날 23:00 UTC, 겨울에는 00:00 UTC. 지금(겨울) gmtoffset은 0이다
+    stamps = [utc_ts(2026, 7, 5, 23), utc_ts(2026, 1, 12, 0)]
+    payload = tz_payload(stamps, {"gmtoffset": 0, "exchangeTimezoneName": "Europe/London"})
+    assert quotes.chart_dates(payload) == ["2026-07-06", "2026-01-12"]
+
+
+def test_chart_dates_without_timezone_name_fall_back_to_gmtoffset():
+    payload = tz_payload([utc_ts(2026, 7, 6, 4)], {"gmtoffset": -18000})
+    assert quotes.chart_dates(payload) == ["2026-07-05"]
+
+
+@pytest.mark.parametrize("name", ["Mars/Olympus_Mons", "../etc/passwd", "", None, 123, ["America/New_York"]])
+def test_chart_dates_with_bad_timezone_name_fall_back_without_error(name):
+    payload = tz_payload([utc_ts(2026, 11, 4, 23, 30)], {"gmtoffset": 32400, "exchangeTimezoneName": name})
+    assert quotes.chart_dates(payload) == ["2026-11-05"]
+
+
+def test_max_dates_use_timezone_name_per_bar():
+    stamps = [utc_ts(2026, 1, 12, 5), utc_ts(2026, 7, 6, 4)]
+    payload = tz_payload(stamps, {"gmtoffset": -18000, "exchangeTimezoneName": "America/New_York"})
+    fields = quotes.max_fields(payload, with_drawdown=False)
+    assert fields["max_dates"] == ["2026-01-12", "2026-07-06"]
+
+
+def test_max_dates_bad_timezone_name_falls_back_without_error():
+    payload = tz_payload([utc_ts(2026, 7, 6, 4)], {"gmtoffset": -18000, "exchangeTimezoneName": "Nowhere/City"})
+    fields = quotes.max_fields(payload, with_drawdown=True)
+    assert fields["max_dates"] == ["2026-07-05"]
+    assert fields["max_start"] == 2026
 
 
 def test_thin_indices_match_thin_closes_and_repeat_same_bar_twice():
@@ -413,7 +467,9 @@ def test_fetch_quotes_dates_have_same_length_as_values_for_every_symbol():
 def test_fetch_quotes_weekly_dates_skip_null_bars():
     ks11 = next(q for q in quotes.fetch_quotes({}, get=split_get) if q["id"] == "KS11")
     assert ks11["weekly"] == [2000.0, 2500.56]
-    assert len(ks11["weekly_dates"]) == 2
+    # WEEKLY 봉 timestamp는 1, 2(null), 3 이고 gmtoffset이 없어 UTC 1970-01-01. null 봉은 빠진다
+    assert ks11["weekly_dates"] == ["1970-01-01", "1970-01-01"]
+    assert len(ks11["weekly_dates"]) == len(ks11["weekly"])
 
 
 def test_weekly_failure_keeps_previous_weekly_dates():

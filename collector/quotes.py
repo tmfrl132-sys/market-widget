@@ -4,6 +4,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -47,13 +48,29 @@ def chart_closes(payload: dict) -> list[float]:
 def chart_dates(payload: dict) -> list[str]:
     """chart_closes와 같은 봉의 시장 현지 날짜(YYYY-MM-DD). null 종가 봉은 날짜도 뺀다."""
     result = payload["chart"]["result"][0]
-    offset = result["meta"].get("gmtoffset", 0)
+    to_date = _bar_date_fn(result["meta"])
     closes = result["indicators"]["quote"][0]["close"]
-    return [_local_date(ts, offset).isoformat() for ts, c in zip(result["timestamp"], closes) if c is not None]
+    return [to_date(ts).isoformat() for ts, c in zip(result["timestamp"], closes) if c is not None]
 
 
 def _local_date(ts: int, offset: int):
     return datetime.fromtimestamp(ts + offset, timezone.utc).date()
+
+
+def _bar_date_fn(meta: dict):
+    """봉 시각 -> 시장 현지 날짜 함수. gmtoffset은 지금의 오프셋 하나뿐이라 서머타임 기간의 과거 봉이 하루 어긋난다.
+    그래서 exchangeTimezoneName으로 봉마다 계산하고, 이름이 없거나 모르는 시간대면 gmtoffset으로 대체한다."""
+    offset = meta.get("gmtoffset", 0)
+    name = meta.get("exchangeTimezoneName")
+    zone = None
+    if isinstance(name, str) and name:
+        try:
+            zone = ZoneInfo(name)
+        except Exception:  # 모르는 이름, 잘못된 형식, 시간대 자료 없음 모두 대체 경로로 간다
+            log.warning("알 수 없는 시간대 %r, gmtoffset으로 대체", name)
+    if zone is None:
+        return lambda ts: _local_date(ts, offset)
+    return lambda ts: datetime.fromtimestamp(ts, zone).date()
 
 
 def drawdowns(closes: list[float]) -> list[float]:
@@ -114,13 +131,14 @@ def max_fields(payload: dict, with_drawdown: bool, id_: str = "") -> dict:
     bars = [(ts, c) for ts, c in zip(result["timestamp"], result["indicators"]["quote"][0]["close"])
             if c is not None]
     closes = [c for _, c in bars]
-    offset = result["meta"].get("gmtoffset", 0)
+    offset = result["meta"].get("gmtoffset", 0)  # max_start, event_marks는 기존대로 이 오프셋을 쓴다
+    to_date = _bar_date_fn(result["meta"])
     size = _bucket_size(len(closes))
     chunks = range(0, len(closes), size)
     picks = thin_indices(closes)
     fields = {
         "max_closes": [round(closes[i], 2) for i in picks],
-        "max_dates": [_local_date(bars[i][0], offset).isoformat() for i in picks],
+        "max_dates": [to_date(bars[i][0]).isoformat() for i in picks],
         "max_drawdowns": [],
         "max_events": [],
         "max_start": _local_date(bars[0][0], offset).year,
