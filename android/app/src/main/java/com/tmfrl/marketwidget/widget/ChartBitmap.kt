@@ -25,7 +25,8 @@ import com.tmfrl.marketwidget.model.yPosition
  * baseline은 점선 값(없으면 점선 없음), baselineLabel은 점선 문구, axisLabel은 세로축 숫자 형식,
  * areaBase는 영역을 채울 기준값(없으면 차트 바닥까지), fixedAxis는 정해 둔 세로축(없으면 값으로 계산),
  * marks는 점에 붙일 문구(값 목록 위치와 문구),
- * xTicks는 가로축 눈금(있으면 아래쪽에 글자 띠를 잡는다), xPositions는 점마다의 가로 위치 0~1(없으면 고르게 놓는다).
+ * xTicks는 가로축 눈금(세로 보조선을 그리고 아래쪽에 글자 띠를 잡는다), xPositions는 점마다의 가로 위치 0~1(없으면 고르게 놓는다),
+ * showXLabels가 false면 세로 보조선만 그리고 글자 띠를 잡지 않는다.
  */
 fun renderLine(
     values: List<Double>,
@@ -45,6 +46,7 @@ fun renderLine(
     marks: List<Pair<Int, String>> = emptyList(),
     xTicks: List<XTick> = emptyList(),
     xPositions: List<Float>? = null,
+    showXLabels: Boolean = true,
 ): Bitmap {
     val w = widthPx.coerceAtLeast(2)
     val h = heightPx.coerceAtLeast(2)
@@ -63,7 +65,7 @@ fun renderLine(
     val plotW = (w - gutter).coerceAtLeast(2f)
     // 가로축 글자가 들어갈 아래쪽 띠. 세로 계산은 띠를 뺀 높이 안에서 한다. 작은 차트는 눈금과 가로 위치를 무시한다.
     val ticks = if (detailed) xTicks else emptyList()
-    val band = if (ticks.isEmpty()) 0f else textPx * X_BAND_LINES
+    val band = if (ticks.isEmpty() || !showXLabels) 0f else textPx * X_BAND_LINES
     val plotH = (h - band).coerceAtLeast(2f)
 
     // 점과 위아래 끝 눈금 숫자가 잘리지 않게 여백을 둔다
@@ -72,6 +74,13 @@ fun renderLine(
     if (points.isEmpty()) return bitmap
 
     if (axis != null) drawAxis(canvas, axis, axisLabel, text, plotW, w.toFloat(), plotH, pad, strokePx)
+
+    // 세로 보조선은 차트 아래에 깔리게 먼저 그리고, 글자 띠로 내려가지 않게 plotH까지만 그린다
+    val xLabels = placeXLabels(ticks, plotW, pad, textPx * X_LABEL_GAP_LINES) { text.measureText(it) }
+    if (xLabels.isNotEmpty()) {
+        val grid = gridPaint(strokePx)
+        xLabels.forEach { canvas.drawLine(it.x, 0f, it.x, plotH, grid) }
+    }
 
     val line = Path().apply {
         moveTo(points[0].first, points[0].second)
@@ -112,9 +121,9 @@ fun renderLine(
             drawBaselineLabel(canvas, baselineLabel, baseline, values.last(), axis, text, backgroundColor, plotW, plotH, pad)
         }
         drawMarks(canvas, marks.filter { (i, _) -> i in points.indices }, points, text, backgroundColor, plotW, strokePx)
-        val baselineY = h - textPx * X_BAND_BOTTOM_LINES
-        placeXLabels(ticks, plotW, pad, textPx * X_LABEL_GAP_LINES) { text.measureText(it) }.forEach { label ->
-            canvas.drawText(label.text, label.left, baselineY, text)
+        if (showXLabels) {
+            val baselineY = h - textPx * X_BAND_BOTTOM_LINES
+            xLabels.forEach { label -> canvas.drawText(label.text, label.left, baselineY, text) }
         }
     }
     return bitmap
@@ -149,15 +158,18 @@ private fun drawMarks(
     }
 }
 
+/** 가로 눈금선과 세로 보조선의 색과 굵기. */
+private fun gridPaint(strokePx: Float) = Paint().apply {
+    color = 0x1FFFFFFF
+    strokeWidth = (strokePx / 2).coerceAtLeast(1f)
+}
+
 /** 눈금선과 오른쪽 숫자. */
 private fun drawAxis(
     canvas: Canvas, axis: YAxis, axisLabel: (Double) -> String, text: Paint,
     plotW: Float, w: Float, h: Float, pad: Float, strokePx: Float,
 ) {
-    val grid = Paint().apply {
-        color = 0x1FFFFFFF
-        strokeWidth = (strokePx / 2).coerceAtLeast(1f)
-    }
+    val grid = gridPaint(strokePx)
     val label = Paint(text).apply { textAlign = Paint.Align.RIGHT }
     axis.ticks.forEach { tick ->
         val y = yPosition(tick, axis.min, axis.max, h, pad)

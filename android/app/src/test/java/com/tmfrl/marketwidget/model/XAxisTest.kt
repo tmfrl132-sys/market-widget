@@ -14,26 +14,180 @@ class XAxisTest {
 
     private fun days(count: Int) = (0 until count).map { java.time.LocalDate.of(2026, 1, 1).plusDays(it.toLong()).toString() }
 
-    @Test fun dateTicks_fiveEvenTicksIncludingEnds() {
+    /** 2026-11-05 실제 수집(cc9fe70)에서 뽑은 날짜. 값은 날짜 수만큼 채워 실제 기간 자르기를 거치게 한다. */
+    private val real: Map<String, Quote> by lazy {
+        val text = XAxisTest::class.java.classLoader!!.getResource("chart_dates_2026_11_05.json")!!.readText()
+        parseMarketData(text).quotes.associate { q ->
+            q.id to q.copy(
+                daily = q.daily_dates.map { 1.0 },
+                weekly = q.weekly_dates.map { 1.0 },
+                max_closes = q.max_dates.map { 1.0 },
+            )
+        }
+    }
+
+    private fun assertTicks(expectedLabels: List<String>, expectedPositions: List<Float>, ticks: List<XTick>) {
+        assertEquals(expectedLabels, labels(ticks))
+        assertEquals(expectedPositions.size, ticks.size)
+        expectedPositions.forEachIndexed { i, position ->
+            assertEquals(expectedLabels[i], position, ticks[i].position, 0.0001f)
+        }
+    }
+
+    @Test fun realDates_kospiOneMonthIsMondays() {
+        assertTicks(
+            listOf("10/12", "10/19", "10/26", "11/2"), listOf(0.1429f, 0.3810f, 0.6190f, 0.8571f),
+            chartXAxis(real.getValue("KS11"), Period.ONE_MONTH).ticks,
+        )
+    }
+
+    @Test fun realDates_kospiThreeMonthsUsesFirstTradingDay() {
+        // 11/1은 일요일이라 11/2가 그 달의 첫 거래일이다
+        assertTicks(
+            listOf("9/1", "10/1", "11/2"), listOf(0.3065f, 0.6290f, 0.9516f),
+            chartXAxis(real.getValue("KS11"), Period.THREE_MONTHS).ticks,
+        )
+    }
+
+    @Test fun realDates_kospiOneYearIsQuarters() {
+        assertTicks(
+            listOf("26.1", "26.4", "26.7", "26.10"), listOf(0.1598f, 0.4016f, 0.6516f, 0.9057f),
+            chartXAxis(real.getValue("KS11"), Period.ONE_YEAR).ticks,
+        )
+    }
+
+    @Test fun realDates_kospiFiveYearsIsYears() {
+        assertTicks(
+            listOf("2022", "2023", "2024", "2025", "2026"), listOf(0.0344f, 0.2328f, 0.4313f, 0.6336f, 0.8321f),
+            chartXAxis(real.getValue("KS11"), Period.FIVE_YEARS).ticks,
+        )
+    }
+
+    @Test fun realDates_kospiMaxUsesFiveYearStep() {
+        assertTicks(
+            listOf("2000", "2005", "2010", "2015", "2020", "2025"),
+            listOf(0.1034f, 0.2698f, 0.4361f, 0.6045f, 0.7708f, 0.9351f),
+            chartXAxis(real.getValue("KS11"), Period.MAX).ticks,
+        )
+    }
+
+    @Test fun realDates_sp500MaxUsesTenYearStep() {
+        assertTicks(
+            listOf("1980", "1990", "2000", "2010", "2020"), listOf(0.1771f, 0.3521f, 0.5292f, 0.7022f, 0.8773f),
+            chartXAxis(real.getValue("GSPC"), Period.MAX).ticks,
+        )
+    }
+
+    @Test fun realDates_bitcoinTradesOnWeekends() {
+        val btc = real.getValue("BTC")
+        assertTicks(
+            listOf("10/19", "10/26", "11/2"), listOf(0.1905f, 0.5238f, 0.8571f),
+            chartXAxis(btc, Period.ONE_MONTH).ticks,
+        )
+        // 코스피와 달리 일요일인 11/1에도 거래해 그날이 경계다
+        assertTicks(listOf("10/1", "11/1"), listOf(0.4355f, 0.9355f), chartXAxis(btc, Period.THREE_MONTHS).ticks)
+        assertTicks(
+            listOf("2016", "2018", "2020", "2022", "2024", "2026"),
+            listOf(0.1071f, 0.2727f, 0.4343f, 0.6000f, 0.7636f, 0.9293f),
+            chartXAxis(btc, Period.MAX).ticks,
+        )
+    }
+
+    @Test fun dateTicks_firstValueOnBoundaryIsNotATick() {
+        // 첫 값 2026-11-02는 월요일이지만 앞 구간을 알 수 없다
+        val dates = listOf("2026-11-02", "2026-11-09", "2026-11-16", "2026-11-17")
+        assertTicks(listOf("11/9", "11/16"), listOf(0.3333f, 0.6667f), dateTicks(dates, 4, Period.ONE_MONTH))
+    }
+
+    @Test fun dateTicks_holidayMondayUsesActualFirstDayOfWeek() {
+        val dates = listOf("2026-10-02", "2026-10-06", "2026-10-13", "2026-10-14")
+        assertEquals(listOf("10/6", "10/13"), labels(dateTicks(dates, 4, Period.ONE_MONTH)))
+    }
+
+    @Test fun dateTicks_quarterSkipsOtherMonths() {
+        val dates = listOf("2025-12-30", "2026-01-02", "2026-02-02", "2026-03-02", "2026-04-01", "2026-05-04")
+        assertEquals(listOf("26.1", "26.4"), labels(dateTicks(dates, 6, Period.ONE_YEAR)))
+    }
+
+    @Test fun dateTicks_maxStepIsSmallestWithAtMostSixTicks() {
+        val everyYear: (IntRange) -> List<String> = { years -> years.map { "$it-01-02" } }
+        // 2001~2006: 첫 값을 뺀 경계 5개. 간격 1
+        assertEquals(
+            listOf("2002", "2003", "2004", "2005", "2006"),
+            labels(dateTicks(everyYear(2001..2006), 6, Period.MAX)),
+        )
+        // 2001~2008: 경계 7개라 간격 2
+        assertEquals(listOf("2002", "2004", "2006", "2008"), labels(dateTicks(everyYear(2001..2008), 8, Period.MAX)))
+        // 1900~2026: 간격 10은 12개라 간격 20. 1900은 첫 값이라 경계가 아니다
+        assertEquals(
+            listOf("1920", "1940", "1960", "1980", "2000", "2020"),
+            labels(dateTicks(everyYear(1900..2026), 127, Period.MAX)),
+        )
+    }
+
+    @Test fun dateTicks_maxYearGapSkipsYearWithoutPoint() {
+        // 2000은 첫 값이라 경계가 아니고, 2002에는 점이 없다
+        val dates = listOf("2000-01-03", "2001-01-03", "2003-01-03", "2004-01-03")
+        assertEquals(listOf("2001", "2003", "2004"), labels(dateTicks(dates, 4, Period.MAX)))
+    }
+
+    @Test fun dateTicks_repeatedDatesDoNotStackTicks() {
+        // max_dates는 처음·마지막 봉이 두 번 들어간다
+        val dates = listOf("1999-12-30", "1999-12-30", "2000-01-03", "2000-01-03", "2001-01-02", "2001-01-02")
+        assertTicks(listOf("2000", "2001"), listOf(0.4f, 0.8f), dateTicks(dates, 6, Period.MAX))
+    }
+
+    @Test fun dateTicks_unsortedDatesGiveNoTicks() {
+        val dates = listOf("2026-01-02", "2026-03-02", "2026-02-02", "2026-04-01")
+        listOf(Period.ONE_MONTH, Period.THREE_MONTHS, Period.ONE_YEAR, Period.FIVE_YEARS, Period.MAX).forEach {
+            assertEquals(emptyList<XTick>(), dateTicks(dates, 4, it))
+        }
+    }
+
+    @Test fun dateTicks_unreadableDateAnywhereGivesNoTicks() {
+        val dates = listOf("2026-01-02", "bad", "2026-02-02", "2026-03-02", "2026-04-01", "2026-05-04")
+        assertEquals(emptyList<XTick>(), dateTicks(dates, 6, Period.THREE_MONTHS))
+    }
+
+    // 경계가 2개 미만이면 균등 간격으로 대체한다
+
+    @Test fun dateTicks_fallbackFiveEvenTicksIncludingEnds() {
+        // 2026-01-01~09에서 주 경계는 1/5 하나뿐이다
         val ticks = dateTicks(days(9), 9, Period.ONE_MONTH)
         assertEquals(listOf(0f, 0.25f, 0.5f, 0.75f, 1f), ticks.map { it.position })
         assertEquals(listOf("1/1", "1/3", "1/5", "1/7", "1/9"), labels(ticks))
     }
 
-    @Test fun dateTicks_uneven63ValuesStillHitsBothEnds() {
-        val ticks = dateTicks(days(63), 63, Period.THREE_MONTHS)
-        assertEquals(5, ticks.size)
-        assertEquals(0f, ticks.first().position, 0f)
-        assertEquals(1f, ticks.last().position, 0f)
+    @Test fun dateTicks_noBoundaryAlsoFallsBack() {
+        val dates = listOf("2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-07")
+        // 위치 0, 1.25, 2.5, 3.75, 5를 반올림하면 0, 1, 3, 4, 5번 점이다
+        assertEquals(listOf("11/2", "11/3", "11/5", "11/6", "11/7"), labels(dateTicks(dates, 6, Period.ONE_MONTH)))
     }
 
-    @Test fun dateTicks_fewerThanFiveValuesUsesEachValue() {
+    @Test fun dateTicks_twoBoundariesDoNotFallBack() {
+        // 2026-01-01~03-04: 달 경계 2/1, 3/1
+        assertTicks(listOf("2/1", "3/1"), listOf(0.5f, 0.9516f), dateTicks(days(63), 63, Period.THREE_MONTHS))
+    }
+
+    @Test fun dateTicks_fallbackFewerThanFiveValuesUsesEachValue() {
         assertEquals(4, dateTicks(days(4), 4, Period.ONE_MONTH).size)
         assertEquals(listOf(0f, 1f), dateTicks(days(2), 2, Period.ONE_MONTH).map { it.position })
         assertEquals(emptyList<XTick>(), dateTicks(days(1), 1, Period.ONE_MONTH))
     }
 
-    @Test fun dateTicks_labelFormatPerPeriod() {
+    @Test fun dateTicks_fallbackRepeatedDatesDoNotStackTicks() {
+        val ticks = dateTicks(listOf("2026-11-05", "2026-11-05", "2026-11-06"), 3, Period.MAX)
+        assertEquals(listOf(0f, 1f), ticks.map { it.position })
+        assertEquals(emptyList<XTick>(), dateTicks(listOf("2026-11-05"), 1, Period.MAX))
+        assertEquals(listOf(0f), dateTicks(listOf("2026-11-05", "2026-11-05"), 2, Period.MAX).map { it.position })
+    }
+
+    @Test fun dateTicks_boundaryFiveYearsIsYearOnly() {
+        val dates = listOf("2024-12-30", "2025-01-06", "2026-01-05", "2026-11-02")
+        assertEquals(listOf("2025", "2026"), labels(dateTicks(dates, 4, Period.FIVE_YEARS)))
+    }
+
+    @Test fun dateTicks_fallbackLabelFormatPerPeriod() {
         val dates = listOf("1996-12-11", "2009-03-02")
         assertEquals(listOf("12/11", "3/2"), labels(dateTicks(dates, 2, Period.ONE_MONTH)))
         assertEquals(listOf("12/11", "3/2"), labels(dateTicks(dates, 2, Period.THREE_MONTHS)))
@@ -114,9 +268,11 @@ class XAxisTest {
 
     @Test fun chartXAxis_maxTicksDoNotDependOnDrawdownLength() {
         // 실제 data.json에서 코스피 max_closes는 494개, max_drawdowns는 246개다
-        val closes = (1..494).map { it.toDouble() }
-        val q = quote(maxCloses = closes, maxDates = days(494), drawdowns = (1..246).map { -it.toDouble() })
-        assertEquals(5, chartXAxis(q, Period.MAX).ticks.size)
+        val kospi = real.getValue("KS11")
+        val withDrawdowns = kospi.copy(max_drawdowns = (1..246).map { -it.toDouble() })
+        assertEquals(494, kospi.max_dates.size)
+        assertEquals(6, chartXAxis(withDrawdowns, Period.MAX).ticks.size)
+        assertEquals(chartXAxis(kospi, Period.MAX), chartXAxis(withDrawdowns, Period.MAX))
     }
 
     @Test fun sessionPosition_clampsToZeroAndOne() {
@@ -142,6 +298,38 @@ class XAxisTest {
         assertEquals(none, todayXAxis(2, times, start, null))
         assertEquals(none, todayXAxis(2, times, end, end))
         assertEquals(none, todayXAxis(2, times, end, start))
+    }
+
+    // 장 시간 밖 봉 방어: 봉의 절반을 넘게 밖이면 믿지 않는다
+
+    @Test fun todayXAxis_allBarsOutsideMeansUntrusted() {
+        // 주말: 봉은 금요일인데 장 시간은 다음 거래일을 가리킨다
+        val friday = listOf(seoul(6, 9), seoul(6, 10), seoul(6, 11))
+        assertEquals(ChartXAxis(), todayXAxis(3, friday, seoul(9, 9), seoul(9, 15, 30)))
+    }
+
+    @Test fun todayXAxis_moreThanHalfOutsideMeansUntrusted() {
+        val times = listOf(seoul(5, 8), seoul(5, 8, 30), seoul(5, 8, 40), seoul(5, 10), seoul(5, 11))
+        assertEquals(ChartXAxis(), todayXAxis(5, times, seoul(5, 9), seoul(5, 15)))
+    }
+
+    @Test fun todayXAxis_exactlyHalfOutsideIsTrusted() {
+        val times = listOf(seoul(5, 8), seoul(5, 8, 30), seoul(5, 12), seoul(5, 15))
+        val axis = todayXAxis(4, times, seoul(5, 9), seoul(5, 15))
+        assertEquals(listOf(0f, 0f, 0.5f, 1f), axis.positions)
+        assertEquals("09:00", axis.ticks.first().label)
+    }
+
+    @Test fun todayXAxis_oneClosingAuctionBarSticksToEnd() {
+        val times = listOf(seoul(5, 9), seoul(5, 12), seoul(5, 15, 30), seoul(5, 15, 32))
+        val axis = todayXAxis(4, times, seoul(5, 9), seoul(5, 15, 30))
+        assertEquals(1f, axis.positions!![3], 0f)
+        assertEquals("15:30", axis.ticks.last().label)
+    }
+
+    @Test fun todayXAxis_barsOnSessionEdgesCountAsInside() {
+        val times = listOf(seoul(5, 9), seoul(5, 15))
+        assertEquals(listOf(0f, 1f), todayXAxis(2, times, seoul(5, 9), seoul(5, 15)).positions)
     }
 
     @Test fun chartXAxis_oldCacheTodayHasNoAxis() {
@@ -227,10 +415,38 @@ class XAxisTest {
 
     private val tenWide: (String) -> Float = { 10f }
 
-    @Test fun placeXLabels_alignsFirstLeftLastRightOthersCenter() {
+    @Test fun placeXLabels_centersEachLabelOnItsTick() {
         val ticks = listOf(XTick(0f, "a"), XTick(0.5f, "b"), XTick(1f, "c"))
         val placed = placeXLabels(ticks, plotW = 120f, pad = 10f, gap = 0f, measure = tenWide)
-        assertEquals(listOf(XLabel("a", 10f), XLabel("b", 55f), XLabel("c", 100f)), placed)
+        assertEquals(listOf(XLabel("a", 5f, 10f), XLabel("b", 55f, 60f), XLabel("c", 105f, 110f)), placed)
+    }
+
+    @Test fun placeXLabels_pushesEndLabelsInsidePlot() {
+        // 오늘 차트의 시작·끝 글자는 이 규칙으로 양 끝에 붙는다. 세로선 자리 x는 밀리지 않는다.
+        val ticks = listOf(XTick(0f, "a"), XTick(1f, "b"))
+        val placed = placeXLabels(ticks, plotW = 100f, pad = 2f, gap = 0f, measure = tenWide)
+        assertEquals(listOf(XLabel("a", 0f, 2f), XLabel("b", 90f, 98f)), placed)
+    }
+
+    @Test fun placeXLabels_boundaryLastTickStaysCentered() {
+        // 경계 눈금은 마지막 눈금이 오른쪽 끝에 있지 않다
+        val ticks = listOf(XTick(0.25f, "a"), XTick(0.75f, "b"))
+        val placed = placeXLabels(ticks, plotW = 100f, pad = 0f, gap = 0f, measure = tenWide)
+        assertEquals(listOf(XLabel("a", 20f, 25f), XLabel("b", 70f, 75f)), placed)
+    }
+
+    @Test fun placeXLabels_labelWiderThanPlotDoesNotThrow() {
+        val placed = placeXLabels(listOf(XTick(0.5f, "a")), plotW = 20f, pad = 0f, gap = 0f, measure = { 30f })
+        assertEquals(listOf(XLabel("a", 0f, 10f)), placed)
+    }
+
+    @Test fun placeXLabels_skippedTickHasNoLineEither() {
+        // 세로 보조선은 결과의 x로 그리므로 건너뛴 눈금에는 선도 없다
+        val ticks = listOf(XTick(0.5f, "a"), XTick(0.52f, "b"), XTick(0.9f, "c"))
+        val placed = placeXLabels(ticks, plotW = 100f, pad = 0f, gap = 0f, measure = tenWide)
+        assertEquals(2, placed.size)
+        assertEquals(50f, placed[0].x, 0.001f)
+        assertEquals(90f, placed[1].x, 0.001f)
     }
 
     @Test fun placeXLabels_skipsLabelOverlappingPrevious() {
@@ -266,5 +482,6 @@ class XAxisTest {
             listOf(XTick(0f, "a"), XTick(0.5f, "b"), XTick(1f, "c")), 120f, 10f, 0f, { 0f },
         )
         assertEquals(xs, placed.map { it.left })
+        assertEquals(xs, placed.map { it.x })
     }
 }
