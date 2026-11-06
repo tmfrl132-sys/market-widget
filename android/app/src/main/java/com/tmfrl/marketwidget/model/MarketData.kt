@@ -36,6 +36,9 @@ data class Quote(
     val intraday_times: List<Long> = emptyList(), // intraday와 1:1, 초 단위 epoch. 기기가 직접 받는다
     val session_start: Long? = null, // 오늘 차트의 장 시작, 초 단위 epoch. 기기가 직접 받는다
     val session_end: Long? = null, // 오늘 차트의 장 끝, 초 단위 epoch. 기기가 직접 받는다
+    val big_move_pct: Double? = null, // 큰 움직임 강조 기준 %. 수집기가 보낸다. null이면 강조하지 않는다
+    val market_tz: String? = null, // 시장 시간대(IANA 이름). 수집기가 보낸다. null이면 장 상태를 보이지 않는다
+    val always_open: Boolean = false, // 늘 거래하는 지표(비트코인). 수집기가 보낸다
 
     val stale: Boolean = false,
 )

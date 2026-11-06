@@ -83,10 +83,10 @@ def test_failed_symbol_without_previous():
     assert ks11["stale"] is True
 
 
-def test_returns_all_ten_in_config_order():
+def test_returns_all_thirteen_in_config_order():
     result = quotes.fetch_quotes({}, get=ok_get)
     assert [q["id"] for q in result] == [
-        "KS11", "KQ11", "GSPC", "IXIC", "KRW", "TNX", "VIX", "CL", "GC", "BTC"]
+        "KS11", "KQ11", "GSPC", "ES", "IXIC", "NQ", "VIX", "KRW", "DXY", "TNX", "CL", "GC", "BTC"]
 
 
 def test_prev_close_when_today_bar_is_null():
@@ -546,3 +546,90 @@ def test_failed_symbol_keeps_previous_dates_and_adds_missing_ones():
     assert ks11["stale"] is True
     assert ks11["daily_dates"] == ["2026-11-04"]
     assert ks11["weekly_dates"] == [] and ks11["max_dates"] == []
+
+
+# --- v0.9 ---
+
+def test_symbols_config_v09():
+    from zoneinfo import ZoneInfo
+    from collector import config
+    ids = [s[0] for s in config.SYMBOLS]
+    assert ids == ["KS11", "KQ11", "GSPC", "ES", "IXIC", "NQ", "VIX", "KRW", "DXY", "TNX", "CL", "GC", "BTC"]
+    assert dict((s[0], s[2]) for s in config.SYMBOLS)["ES"] == "ES=F"
+    assert dict((s[0], s[2]) for s in config.SYMBOLS)["DXY"] == "DX-Y.NYB"
+    for id_ in ids:
+        assert id_ in config.BIG_MOVE_BASE
+        ZoneInfo(config.MARKET_TZ[id_])
+    assert "DXY" in config.NO_DRAWDOWN
+    assert {"ES", "NQ"} <= config.STOCKS
+    assert config.ALWAYS_OPEN == {"BTC"}
+    assert config.BIG_MOVE_DAYS == 60
+    assert config.BIG_MOVE_FACTOR == 2.5
+
+
+def dxy_payload(stamps, closes, market_time):
+    return {"chart": {"result": [{
+        "meta": {"regularMarketPrice": 102.5, "regularMarketTime": market_time, "gmtoffset": -18000},
+        "timestamp": stamps,
+        "indicators": {"quote": [{"close": closes}]},
+    }]}}
+
+
+def test_prev_close_skips_empty_sunday_bar():
+    payload = dxy_payload([1793941200, 1794114000, 1794200400], [102.236, None, 102.5], 1794236400)
+    price, prev_close, _ = quotes.parse_chart(payload)
+    assert prev_close == 102.236
+    get = lambda url, **kw: FakeResponse(payload)
+    dxy = next(q for q in quotes.fetch_quotes({}, get=get) if q["id"] == "DXY")
+    assert dxy["change"] == 0.26
+    assert dxy["change_pct"] == 0.26
+
+
+def test_prev_close_unknown_when_weekday_bar_empty_regression():
+    # 목요일 11-05 봉이 비고 마지막 두 봉이 (11-05 None, 11-06 값). 평일 빈 봉은 등락률을 비운다.
+    payload = dxy_payload([1793854800, 1793941200], [None, 102.5], 1793941200 + 36000)
+    _, prev_close, _ = quotes.parse_chart(payload)
+    assert prev_close is None
+
+
+def test_big_move_pct_rules():
+    assert quotes.big_move_pct("KS11", [100 * 1.01 ** i for i in range(61)]) == 2.5
+    assert quotes.big_move_pct("KS11", [100 * 1.01 ** i for i in range(60)]) == 2.0
+    assert quotes.big_move_pct("KS11", [100.0] * 61) == 2.0
+    assert quotes.big_move_pct("BTC", [100 * 1.03 ** i for i in range(61)]) == 7.5
+
+
+def test_fetch_quotes_new_fields_on_success():
+    result = {q["id"]: q for q in quotes.fetch_quotes({}, get=ok_get)}
+    assert result["BTC"]["market_tz"] == "UTC"
+    assert result["BTC"]["always_open"] is True
+    assert result["KS11"]["market_tz"] == "Asia/Seoul"
+    assert result["KS11"]["always_open"] is False
+    assert result["KS11"]["big_move_pct"] == 2.0
+
+
+def failing_get(url, **kwargs):
+    raise requests.ConnectionError("down")
+
+
+def test_stale_without_previous_big_move_uses_default_and_table_fields():
+    prev = {"KS11": {"id": "KS11", "name": "코스피", "price": 1.0}}
+    result = {q["id"]: q for q in quotes.fetch_quotes(prev, get=failing_get)}
+    assert result["KS11"]["stale"] is True
+    assert result["KS11"]["big_move_pct"] == 2.0
+    assert result["KS11"]["market_tz"] == "Asia/Seoul"
+    assert result["KS11"]["always_open"] is False
+
+
+def test_stale_keeps_previous_big_move():
+    prev = {"KS11": {"id": "KS11", "name": "코스피", "price": 1.0, "big_move_pct": 4.3}}
+    result = {q["id"]: q for q in quotes.fetch_quotes(prev, get=failing_get)}
+    assert result["KS11"]["big_move_pct"] == 4.3
+
+
+def test_failed_from_start_has_default_and_table_fields():
+    result = {q["id"]: q for q in quotes.fetch_quotes({}, get=failing_get)}
+    assert result["BTC"]["big_move_pct"] == 5.0
+    assert result["BTC"]["market_tz"] == "UTC"
+    assert result["BTC"]["always_open"] is True
+    assert result["DXY"]["big_move_pct"] == 0.7

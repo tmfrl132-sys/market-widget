@@ -1,6 +1,7 @@
 """Yahoo 차트 API에서 시세를 가져온다."""
 
 import logging
+import statistics
 import time
 from datetime import datetime, timezone
 from urllib.parse import quote
@@ -8,8 +9,8 @@ from zoneinfo import ZoneInfo
 
 import requests
 
-from collector.config import (EVENT_MIN_DEPTH, HTTP_TIMEOUT, MARKET_EVENTS, MAX_POINTS, NO_DRAWDOWN,
-                              RETRIES, SYMBOLS)
+from collector.config import (ALWAYS_OPEN, BIG_MOVE_BASE, BIG_MOVE_DAYS, BIG_MOVE_FACTOR, EVENT_MIN_DEPTH, HTTP_TIMEOUT, MARKET_EVENTS, MARKET_TZ,
+                              MAX_POINTS, NO_DRAWDOWN, RETRIES, SYMBOLS)
 
 log = logging.getLogger(__name__)
 
@@ -24,7 +25,10 @@ def parse_chart(payload: dict) -> tuple[float, float | None, list[float]]:
     """(현재값, 전일 종가, 최근 5개 종가)를 돌려준다. 전일 종가를 알 수 없으면 None이다."""
     result = payload["chart"]["result"][0]
     meta = result["meta"]
+    offset = meta.get("gmtoffset", 0)
     rows = list(zip(result["timestamp"], result["indicators"]["quote"][0]["close"]))
+    # 시장 현지 날짜가 토·일인 빈 봉(달러인덱스 일요일 봉)은 건너뛴다. 평일 빈 봉은 남겨 등락률을 비운다.
+    rows = [(ts, c) for ts, c in rows if c is not None or _local_date(ts, offset).weekday() < 5]
     closes = [c for _, c in rows if c is not None]
     price = meta.get("regularMarketPrice") or closes[-1]
     market_time = meta.get("regularMarketTime")
@@ -33,10 +37,19 @@ def parse_chart(payload: dict) -> tuple[float, float | None, list[float]]:
     else:
         # 마지막 봉이 시세 시각과 같은 날이면 그 앞 봉이 전일 종가이고, 아니면 마지막 봉이 전일 종가다.
         # 그 봉이 비어 있으면 더 앞 종가와 비교하지 않는다. 전전일 종가와 비교하면 등락률이 틀린다.
-        offset = meta.get("gmtoffset", 0)
         last_is_today = _local_date(rows[-1][0], offset) == _local_date(market_time, offset)
         prev_close = rows[-2][1] if last_is_today else rows[-1][1]
     return price, prev_close, closes[-5:]
+
+
+def big_move_pct(id_: str, closes: list[float]) -> float:
+    """큰 움직임 강조 기준(%). max(기본값, 배수 x 최근 60거래일 하루 등락폭 절댓값의 중앙값), 소수 첫째 자리."""
+    base = BIG_MOVE_BASE[id_]
+    if len(closes) < BIG_MOVE_DAYS + 1:
+        return base
+    tail = closes[-(BIG_MOVE_DAYS + 1):]
+    moves = [abs(b / a - 1) * 100 for a, b in zip(tail, tail[1:])]
+    return round(max(base, BIG_MOVE_FACTOR * statistics.median(moves)), 1)
 
 
 def chart_closes(payload: dict) -> list[float]:
@@ -228,17 +241,25 @@ def fetch_quotes(prev: dict[str, dict], get=requests.get) -> list[dict]:
                 "daily_dates": chart_dates(payload),
                 **_fetch_weekly(symbol, get, prev.get(id_, {})),
                 **_fetch_max(id_, symbol, get, prev.get(id_, {})),
+                "big_move_pct": big_move_pct(id_, daily),
+                "market_tz": MARKET_TZ[id_],
+                "always_open": id_ in ALWAYS_OPEN,
                 "stale": False,
             })
         except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as e:
             log.warning("%s 시세 실패: %s", symbol, e)
             old = prev.get(id_)
             if old:
-                items.append({"daily_dates": [], "weekly_dates": [], "max_dates": [], **old, "stale": True})
+                items.append({"daily_dates": [], "weekly_dates": [], "max_dates": [], **old,
+                              "big_move_pct": old.get("big_move_pct") or BIG_MOVE_BASE[id_],
+                              "market_tz": MARKET_TZ[id_], "always_open": id_ in ALWAYS_OPEN,
+                              "stale": True})
             else:
                 items.append({"id": id_, "name": name, "price": None, "change": None,
                               "change_pct": None, "history": [], "chart": [],
                               "daily": [], "daily_dates": [], "weekly": [], "weekly_dates": [],
                               "max_closes": [], "max_dates": [], "max_drawdowns": [],
-                              "max_events": [], "max_start": None, "peak": None, "mdd": None, "stale": True})
+                              "max_events": [], "max_start": None, "peak": None, "mdd": None,
+                              "big_move_pct": BIG_MOVE_BASE[id_], "market_tz": MARKET_TZ[id_],
+                              "always_open": id_ in ALWAYS_OPEN, "stale": True})
     return items

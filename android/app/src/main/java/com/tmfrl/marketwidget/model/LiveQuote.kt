@@ -8,6 +8,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import java.time.DateTimeException
+import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.LocalTime
@@ -20,10 +21,13 @@ val LIVE_SYMBOLS: Map<String, String> = mapOf(
     "KS11" to "^KS11",
     "KQ11" to "^KQ11",
     "GSPC" to "^GSPC",
+    "ES" to "ES=F",
     "IXIC" to "^IXIC",
-    "KRW" to "KRW=X",
-    "TNX" to "^TNX",
+    "NQ" to "NQ=F",
     "VIX" to "^VIX",
+    "KRW" to "KRW=X",
+    "DXY" to "DX-Y.NYB",
+    "TNX" to "^TNX",
     "CL" to "CL=F",
     "GC" to "GC=F",
     "BTC" to "BTC-USD",
@@ -88,6 +92,8 @@ private val json = Json { ignoreUnknownKeys = true }
 private fun localDate(epochSeconds: Long, offset: Long) =
     Instant.ofEpochSecond(epochSeconds + offset).atOffset(ZoneOffset.UTC).toLocalDate()
 
+private val WEEKEND = setOf(DayOfWeek.SATURDAY, DayOfWeek.SUNDAY)
+
 private fun round2(value: Double) = round(value * 100) / 100
 
 private fun round1(value: Double) = round(value * 10) / 10
@@ -129,10 +135,13 @@ fun parseIntraday(text: String): IntradaySeries {
 fun parseLiveQuote(text: String): LiveQuote? {
     val result = json.decodeFromString<ChartResponse>(text).chart.result?.firstOrNull() ?: return null
     val closes = result.indicators.quote.firstOrNull()?.close ?: return null
-    val rows = result.timestamp.zip(closes)
+    val meta = result.meta
+    // 시장 현지 날짜가 토·일인 빈 봉은 거래가 없던 날이라 뺀다(달러인덱스 일요일 봉). 평일 빈 봉은 남겨 아래 규칙을 따른다.
+    val rows = result.timestamp.zip(closes).filterNot { (time, close) ->
+        close == null && localDate(time, meta.gmtoffset).dayOfWeek in WEEKEND
+    }
     val filled = rows.mapNotNull { it.second }
     if (rows.size < 2 || filled.isEmpty()) return null
-    val meta = result.meta
     val price = meta.regularMarketPrice ?: filled.last()
     val marketTime = meta.regularMarketTime
     // 마지막 봉이 시세 시각과 같은 날이면 그 앞 봉이 전일 종가이고, 아니면 마지막 봉이 전일 종가다.

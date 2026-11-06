@@ -393,7 +393,60 @@ class LiveQuoteTest {
         assertEquals(data, applyLiveQuotes(data, emptyMap(), "new"))
     }
 
-    @Test fun symbols_coverAllTenQuotes() {
-        assertEquals(10, LIVE_SYMBOLS.size)
+    @Test fun symbols_coverAllThirteenQuotesInCollectorOrder() {
+        assertEquals(
+            listOf("KS11", "KQ11", "GSPC", "ES", "IXIC", "NQ", "VIX", "KRW", "DXY", "TNX", "CL", "GC", "BTC"),
+            LIVE_SYMBOLS.keys.toList(),
+        )
+        assertEquals("ES=F", LIVE_SYMBOLS["ES"])
+        assertEquals("NQ=F", LIVE_SYMBOLS["NQ"])
+        assertEquals("DX-Y.NYB", LIVE_SYMBOLS["DXY"])
+    }
+
+    /** 뉴욕 시간(gmtoffset -18000) range=5d 응답. 수집기 parse_chart 테스트와 같은 자료다. */
+    private fun newYorkChart(price: String, time: Long, stamps: List<Long>, closes: String) = """
+        {"chart": {"result": [{
+          "meta": {"regularMarketPrice": $price, "regularMarketTime": $time, "gmtoffset": -18000, "symbol": "DX-Y.NYB"},
+          "timestamp": $stamps,
+          "indicators": {"quote": [{"close": $closes}]}
+        }], "error": null}}
+    """
+
+    @Test fun parse_skipsWeekendEmptyBarForMondayDollarIndex() {
+        // 뉴욕 11-06 금, 11-08 일(빈 봉), 11-09 월 0시. 시세는 월 10:00
+        val live = parseLiveQuote(
+            newYorkChart("102.5", 1794236400L, listOf(1793941200L, 1794114000L, 1794200400L), "[102.236, null, 102.5]"),
+        )!!
+        assertEquals(102.236, live.prevClose, 0.0)
+        assertEquals(0.26, live.change, 0.0)
+        assertEquals(0.26, live.changePct, 0.0)
+    }
+
+    @Test fun parse_weekdayEmptyBarStillMeansNoChange() {
+        // 뉴욕 11-04 수, 11-05 목(빈 봉), 11-06 금 0시. 시세는 금 10:00. 평일 빈 봉은 지금 규칙대로 비운다.
+        assertNull(
+            parseLiveQuote(
+                newYorkChart("102.236", 1793977200L, listOf(1793768400L, 1793854800L, 1793941200L), "[102.0, null, 102.236]"),
+            ),
+        )
+    }
+
+    @Test fun apply_keepsCollectorOnlyFields() {
+        val base = Quote(
+            "KS11", "코스피", 100.0, 1.0, 1.0, daily = listOf(99.0, 100.0),
+            big_move_pct = 2.0, market_tz = "Asia/Seoul", always_open = false,
+        )
+        val btc = Quote("BTC", "비트코인", 1.0, 0.0, 0.0, big_move_pct = 5.0, market_tz = "UTC", always_open = true)
+        val merged = applyLiveQuotes(
+            MarketData("old", listOf(base, btc), emptyList()),
+            mapOf("KS11" to LiveQuote(95.0, -5.0, -5.0, 100.0), "BTC" to LiveQuote(2.0, 1.0, 100.0, 1.0)),
+            "new",
+        ).quotes
+        assertEquals(2.0, merged[0].big_move_pct!!, 0.0)
+        assertEquals("Asia/Seoul", merged[0].market_tz)
+        assertFalse(merged[0].always_open)
+        assertEquals(5.0, merged[1].big_move_pct!!, 0.0)
+        assertEquals("UTC", merged[1].market_tz)
+        assertEquals(true, merged[1].always_open)
     }
 }

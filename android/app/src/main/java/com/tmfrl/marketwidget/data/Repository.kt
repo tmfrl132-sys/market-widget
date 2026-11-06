@@ -83,7 +83,7 @@ class Repository(
         fun forContext(context: Context) =
             Repository(File(context.filesDir, "data.json"), ::fetchLiveQuotes) { httpGet(DATA_URL) }
 
-        /** 10개를 한꺼번에 받는다. 실패한 항목은 결과에서 빠진다. */
+        /** LIVE_SYMBOLS 13개를 한꺼번에 받는다. 실패한 항목은 결과에서 빠진다. */
         private suspend fun fetchLiveQuotes(): Map<String, LiveQuote> = coroutineScope {
             LIVE_SYMBOLS.map { (id, symbol) ->
                 async(Dispatchers.IO) {

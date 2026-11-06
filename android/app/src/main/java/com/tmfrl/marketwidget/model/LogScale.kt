@@ -22,10 +22,13 @@ private fun ticksIn(low: Double, high: Double, step: Double): List<Double> =
 fun logChartFor(values: List<Double>): LogChart? {
     if (values.size < 2 || values.any { it <= 0 }) return null
     val logs = values.map { log10(it / values.first()) }
-    val low = logs.min()
-    val high = logs.max()
+    return LogChart(logs, logAxis(logs.min(), logs.max()))
+}
+
+/** 지수 범위의 세로축. 10배 이상 차이 나면 정수 지수, 아니면 0.05/0.1/0.2/0.5 중 눈금 5개 이하인 가장 작은 간격. */
+internal fun logAxis(low: Double, high: Double): YAxis {
     val step = if (high - low >= 1) 1.0 else FRACTION_STEPS.first { ticksIn(low, high, it).size <= MAX_TICKS }
-    return LogChart(logs, YAxis(low, high, ticksIn(low, high, step)))
+    return YAxis(low, high, ticksIn(low, high, step))
 }
 
 private val SUPERSCRIPTS = mapOf(

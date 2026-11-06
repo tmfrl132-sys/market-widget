@@ -50,28 +50,49 @@ import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
 import com.tmfrl.marketwidget.data.Repository
+import com.tmfrl.marketwidget.model.ChartSelection
+import com.tmfrl.marketwidget.model.CompareSeries
 import com.tmfrl.marketwidget.model.Event
 import com.tmfrl.marketwidget.model.MarketData
+import com.tmfrl.marketwidget.model.MarketState
+import com.tmfrl.marketwidget.model.MarketStatus
 import com.tmfrl.marketwidget.model.Quote
 import com.tmfrl.marketwidget.model.Trend
+import com.tmfrl.marketwidget.model.afterAutoOn
+import com.tmfrl.marketwidget.model.afterCompareButton
+import com.tmfrl.marketwidget.model.afterTileTap
+import com.tmfrl.marketwidget.model.bigMoveTrend
 import com.tmfrl.marketwidget.model.chartSummary
+import com.tmfrl.marketwidget.model.compareLogChart
+import com.tmfrl.marketwidget.model.compareSeries
+import com.tmfrl.marketwidget.model.dateTicks
+import com.tmfrl.marketwidget.model.detailMinHeightDp
 import com.tmfrl.marketwidget.model.flagOf
 import com.tmfrl.marketwidget.model.drawdownSummary
 import com.tmfrl.marketwidget.model.formatAxisPct
 import com.tmfrl.marketwidget.model.formatChangeBadge
+import com.tmfrl.marketwidget.model.formatCompareStart
 import com.tmfrl.marketwidget.model.formatDday
 import com.tmfrl.marketwidget.model.formatDrawdown
 import com.tmfrl.marketwidget.model.formatEventDate
+import com.tmfrl.marketwidget.model.formatIndex
+import com.tmfrl.marketwidget.model.formatLegendChange
+import com.tmfrl.marketwidget.model.formatLegendValue
+import com.tmfrl.marketwidget.model.formatMarketState
 import com.tmfrl.marketwidget.model.YAxis
 import com.tmfrl.marketwidget.model.formatPowerOfTen
 import com.tmfrl.marketwidget.model.formatPrice
+import com.tmfrl.marketwidget.model.legendChangePct
 import com.tmfrl.marketwidget.model.logChartFor
 import com.tmfrl.marketwidget.model.formatSignedAmount
 import com.tmfrl.marketwidget.model.formatUpdatedAt
+import com.tmfrl.marketwidget.model.marketState
+import com.tmfrl.marketwidget.model.parseUpdatedAt
 import com.tmfrl.marketwidget.model.seoulToday
 import com.tmfrl.marketwidget.model.autoQuoteIds
 import com.tmfrl.marketwidget.model.nextAutoQuote
-import com.tmfrl.marketwidget.model.selectionAfterTap
+import com.tmfrl.marketwidget.model.tileGrid
+import com.tmfrl.marketwidget.model.topPartHeightDp
 import com.tmfrl.marketwidget.model.trendOf
 import com.tmfrl.marketwidget.work.AutoTick
 import com.tmfrl.marketwidget.model.upcomingEvents
@@ -89,11 +110,6 @@ import com.tmfrl.marketwidget.model.parsePeriod
 import com.tmfrl.marketwidget.model.eventRows
 import com.tmfrl.marketwidget.model.fitBitmap
 
-/** 이 높이보다 크면 시세 아래에 차트·일정 칸을 둔다. */
-private val DETAIL_MIN_HEIGHT = 220.dp
-
-/** 차트·일정 칸 위쪽(테두리, 머리줄, 시세 두 줄)이 차지하는 대략의 높이. */
-private val TOP_PART_HEIGHT = 230.dp
 private val EVENT_ROW_HEIGHT = 24.dp
 
 /** 차트 비트맵 픽셀 상한. RGB_565라 약 500KB. */
@@ -114,6 +130,15 @@ private val UP_TINT = Color(0x33FF5A5F)
 private val DOWN_TINT = Color(0x334D8DFF)
 private val FLAT_TINT = Color(0x338B95A7)
 
+/** 장중 점. 빨강·파랑은 등락 전용이라 초록을 쓴다. */
+private val LIVE_DOT = Color(0xFF34D399)
+
+/** 비교 지표 선과 비교 안내 글자. 빨강·파랑은 등락 뜻이라 선 색으로 쓰지 않는다. */
+private val COMPARE_LINE = Color(0xFFFBBF24)
+
+/** 비교 차트의 기준값. 공통 시작일 값을 100으로 둔다. */
+private const val COMPARE_BASE = 100.0
+
 /** 새 데이터를 받을 때마다 올리는 값. 위젯 상태가 바뀌어야 Glance가 다시 그린다. */
 private val DATA_VERSION = longPreferencesKey("data_version")
 
@@ -132,8 +157,20 @@ private val LOG_SCALE = booleanPreferencesKey("log_scale")
 private val AUTO = booleanPreferencesKey("auto")
 private val SAVED_SELECTED = stringPreferencesKey("saved_selected")
 
+/** 겹쳐 볼 지표 id와, 비교할 타일을 고르는 중인지. 위젯마다 따로 기억한다. */
+private val COMPARE = stringPreferencesKey("compare")
+private val COMPARE_PICKING = booleanPreferencesKey("compare_picking")
+
 private fun MutablePreferences.setSelected(id: String?) {
     if (id == null) remove(SELECTED) else this[SELECTED] = id
+}
+
+private fun Preferences.selection() = ChartSelection(this[SELECTED], this[COMPARE], this[COMPARE_PICKING] == true)
+
+private fun MutablePreferences.setSelection(s: ChartSelection) {
+    setSelected(s.selected)
+    if (s.compare == null) remove(COMPARE) else this[COMPARE] = s.compare
+    if (s.picking) this[COMPARE_PICKING] = true else remove(COMPARE_PICKING)
 }
 
 class MarketWidget : GlanceAppWidget() {
@@ -147,7 +184,7 @@ class MarketWidget : GlanceAppWidget() {
             val state = currentState<Preferences>()
             state[DATA_VERSION]
             WidgetContent(
-                repository.cached(), ZonedDateTime.now(), state[SELECTED], parsePeriod(state[PERIOD]),
+                repository.cached(), ZonedDateTime.now(), state.selection(), parsePeriod(state[PERIOD]),
                 state[LOG_SCALE] == true, state[AUTO] == true,
             )
         }
@@ -171,6 +208,14 @@ class ToggleLogAction : ActionCallback {
     }
 }
 
+/** 비교 버튼. 누르면 비교할 타일 고르기를 시작하고, 고르는 중이거나 비교 중이면 끈다. */
+class ToggleCompareAction : ActionCallback {
+    override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
+        updateAppWidgetState(context, glanceId) { prefs -> prefs.setSelection(afterCompareButton(prefs.selection())) }
+        MarketWidget().update(context, glanceId)
+    }
+}
+
 /** 모든 위젯의 상태 버전을 올리고 다시 그린다. */
 suspend fun redrawAllWidgets(context: Context) {
     val ids = GlanceAppWidgetManager(context).getGlanceIds(MarketWidget::class.java)
@@ -182,6 +227,7 @@ suspend fun redrawAllWidgets(context: Context) {
 
 /**
  * 시세 타일을 누르면 그 종목 차트를 보여주고, 다시 누르면 일정으로 돌아간다.
+ * 비교할 타일을 고르는 중이면 그 타일이 비교 대상이 된다(afterTileTap).
  * 자동모드에서는 그 종목으로 건너뛰고, 거기서 1분을 새로 센다.
  */
 class SelectQuoteAction : ActionCallback {
@@ -190,14 +236,14 @@ class SelectQuoteAction : ActionCallback {
         var auto = false
         updateAppWidgetState(context, glanceId) { prefs ->
             auto = prefs[AUTO] == true
-            prefs.setSelected(selectionAfterTap(prefs[SELECTED], tapped, auto))
+            prefs.setSelection(afterTileTap(prefs.selection(), tapped, auto))
         }
         MarketWidget().update(context, glanceId)
         if (auto) AutoTick.schedule(context)
     }
 }
 
-/** 자동 버튼. 켜면 첫 종목부터 돌고, 끄면 켜기 전 화면으로 돌아간다. */
+/** 자동 버튼. 켜면 비교를 끄고 첫 종목부터 돌고, 끄면 켜기 전 화면으로 돌아간다. */
 class ToggleAutoAction : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
         val quotes = Repository.forContext(context).cached()?.quotes.orEmpty()
@@ -210,7 +256,7 @@ class ToggleAutoAction : ActionCallback {
                 prefs[AUTO] = true
                 prefs[SELECTED]?.let { prefs[SAVED_SELECTED] = it }
                 val first = nextAutoQuote(null, autoQuoteIds(quotes, parsePeriod(prefs[PERIOD])))
-                prefs.setSelected(first)
+                prefs.setSelection(afterAutoOn(prefs.selection()).copy(selected = first))
             }
         }
         MarketWidget().update(context, glanceId)
@@ -254,10 +300,9 @@ private fun Dp.toPx(density: Float) = (value * density).toInt()
 
 @Composable
 private fun WidgetContent(
-    data: MarketData?, now: ZonedDateTime, selected: String?, period: Period, logScale: Boolean, auto: Boolean,
+    data: MarketData?, now: ZonedDateTime, selection: ChartSelection, period: Period, logScale: Boolean, auto: Boolean,
 ) {
     val size = LocalSize.current
-    val large = size.height >= DETAIL_MIN_HEIGHT
     Column(
         modifier = GlanceModifier.fillMaxSize()
             .background(BACKGROUND)
@@ -273,32 +318,49 @@ private fun WidgetContent(
                 modifier = GlanceModifier.clickable(actionRunCallback<RefreshAction>()),
             )
         } else {
-            QuotesAndDetail(data, now, selected, period, logScale, auto, size, large, GlanceModifier.defaultWeight())
+            QuotesAndDetail(data, now, selection, period, logScale, auto, size, GlanceModifier.defaultWeight())
         }
     }
 }
 
 @Composable
 private fun QuotesAndDetail(
-    data: MarketData, now: ZonedDateTime, selected: String?, period: Period, logScale: Boolean, auto: Boolean,
-    size: DpSize, large: Boolean, modifier: GlanceModifier,
+    data: MarketData, now: ZonedDateTime, selection: ChartSelection, period: Period, logScale: Boolean, auto: Boolean,
+    size: DpSize, modifier: GlanceModifier,
 ) {
+    // 한 줄 칸 수는 위젯 폭으로 정하고, 줄 수가 늘면 차트·일정 칸 위쪽 높이도 그만큼 늘린다
+    val grid = tileGrid(size.width.value, data.quotes.size)
+    val large = size.height.value >= detailMinHeightDp(grid.rows)
+    // 장 상태는 화면의 숫자를 받은 시각 기준이다
+    val asOf = parseUpdatedAt(data.updated_at)
     Column(modifier = modifier.fillMaxWidth()) {
-        val tileWidth = (size.width - 20.dp) / 5 - 4.dp
-        data.quotes.chunked(5).forEach { row ->
-            Row(modifier = GlanceModifier.fillMaxWidth()) {
-                row.forEach {
-                    QuoteTile(it, it.id == selected, showSpark = large, tileWidth, GlanceModifier.defaultWeight())
+        val tileWidth = (size.width - 20.dp) / grid.perRow - 4.dp
+        // 타일 줄을 한 Column에 묶는다. Glance는 Row·Column 하나에 자식을 10개까지만 그려서, 줄이 늘어도 아래 일정이 빠지지 않게 한다.
+        Column(modifier = GlanceModifier.fillMaxWidth()) {
+            data.quotes.chunked(grid.perRow).forEach { row ->
+                Row(modifier = GlanceModifier.fillMaxWidth()) {
+                    row.forEach {
+                        val state = asOf?.let { time -> marketState(it, time) }
+                        QuoteTile(it, it.id == selection.selected, showSpark = large, tileWidth, state, GlanceModifier.defaultWeight())
+                    }
+                    // 마지막 줄의 빈 칸도 같은 너비로 채워 세로 열을 맞춘다
+                    repeat(grid.perRow - row.size) { Spacer(GlanceModifier.defaultWeight()) }
                 }
             }
         }
         if (large) {
             Spacer(GlanceModifier.height(8.dp))
-            // 시세 두 줄 아래 남는 높이를 모두 차트·일정이 쓴다
-            val detailHeight = maxOf(60.dp, size.height - TOP_PART_HEIGHT)
-            val chosen = data.quotes.firstOrNull { it.id == selected }
+            // 시세 줄 아래 남는 높이를 모두 차트·일정이 쓴다
+            val detailHeight = maxOf(60.dp, size.height - topPartHeightDp(grid.rows).dp)
+            val chosen = data.quotes.firstOrNull { it.id == selection.selected }
             if (chosen != null && chartValues(chosen, period).size >= 2) {
-                ChartPanel(chosen, period, logScale, auto, size.width - 20.dp, detailHeight, GlanceModifier.defaultWeight())
+                // 자동모드에서는 비교하지 않는다
+                val other = if (auto) null else data.quotes.firstOrNull { it.id == selection.compare && it.id != chosen.id }
+                val state = asOf?.let { marketState(chosen, it) }
+                ChartPanel(
+                    chosen, other, !auto && selection.picking, state, period, logScale, auto,
+                    size.width - 20.dp, detailHeight, GlanceModifier.defaultWeight(),
+                )
             } else if (chosen != null) {
                 // 앱 업데이트 직후처럼 기기에 저장된 data.json이 차트 데이터 없는 옛 형식일 때
                 Text(
@@ -307,7 +369,7 @@ private fun QuotesAndDetail(
                     modifier = GlanceModifier.clickable(actionRunCallback<RefreshAction>()),
                 )
                 // 고른 기간의 데이터가 없어도 다른 기간으로 옮길 수 있게 둔다
-                PeriodSelector(period, logScale)
+                PeriodSelector(period, logScale, compareButton = null)
             } else {
                 val today = seoulToday(now)
                 val rows = eventRows(detailHeight.value - 20f, EVENT_ROW_HEIGHT.value, min = 3)
@@ -343,59 +405,113 @@ private fun Header(data: MarketData?, now: ZonedDateTime, auto: Boolean) {
     }
 }
 
+/**
+ * 시세 타일. 바깥 Box(테두리색) 안에 Column(타일색)을 겹쳐 2dp 테두리처럼 보이게 한다.
+ * 큰 움직임이면 테두리와 등락 배지를 상승 빨강·하락 파랑으로 칠하고, 아니면 테두리색이 타일색이라 보이지 않는다.
+ */
 @Composable
-private fun QuoteTile(quote: Quote, selected: Boolean, showSpark: Boolean, tileWidth: Dp, modifier: GlanceModifier) {
+private fun QuoteTile(
+    quote: Quote, selected: Boolean, showSpark: Boolean, tileWidth: Dp, state: MarketState?, modifier: GlanceModifier,
+) {
     val alpha = if (quote.stale) 0.5f else 1f
     val tileColor = if (selected) TILE_SELECTED else TILE
     val (color, tint) = trendColors(quote.change_pct)
+    val accent = when (bigMoveTrend(quote)) {
+        Trend.UP -> UP
+        Trend.DOWN -> DOWN
+        else -> null
+    }
     Box(modifier = modifier.padding(2.dp)) {
-        Column(
+        Box(
             modifier = GlanceModifier.fillMaxWidth()
-                .background(tileColor)
+                .background(accent ?: tileColor)
                 .cornerRadius(12.dp)
-                .padding(horizontal = 6.dp, vertical = 5.dp)
+                .padding(2.dp)
                 .clickable(actionRunCallback<SelectQuoteAction>(actionParametersOf(QUOTE_ID to quote.id))),
         ) {
-            Text(quote.name, style = style(SUBTLE.copy(alpha = alpha), 10), maxLines = 1)
-            Text(formatPrice(quote.price), style = style(TEXT.copy(alpha = alpha), 14, bold = true), maxLines = 1)
-            Box(modifier = GlanceModifier.background(tint).cornerRadius(6.dp).padding(horizontal = 4.dp, vertical = 1.dp)) {
-                Text(formatChangeBadge(quote.change_pct), style = style(color.copy(alpha = alpha), 10, bold = true), maxLines = 1)
-            }
-            if (showSpark) {
-                val density = LocalContext.current.resources.displayMetrics.density
-                val sparkHeight = 18.dp
-                Spacer(GlanceModifier.height(4.dp))
-                // 큰 오늘 차트처럼 장 시작~끝 중 받은 시각까지만 그린다. 장 시간을 믿을 수 없으면 가로 전체로 늘린다.
-                // 아직 점이 모자라면 타일 높이만 맞춘다.
-                if (quote.intraday.size >= 2) {
-                    val bitmap = renderLine(
-                        values = quote.intraday,
-                        lineColor = color.toArgb(),
-                        backgroundColor = tileColor.toArgb(),
-                        widthPx = (tileWidth - 12.dp).toPx(density),
-                        heightPx = sparkHeight.toPx(density),
-                        strokePx = 1.5f * density,
-                        detailed = false,
-                        xPositions = tileXPositions(quote),
+            Column(
+                modifier = GlanceModifier.fillMaxWidth()
+                    .background(tileColor)
+                    .cornerRadius(10.dp)
+                    .padding(horizontal = 4.dp, vertical = 3.dp),
+            ) {
+                Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        quote.name,
+                        style = style(SUBTLE.copy(alpha = alpha), 10),
+                        maxLines = 1,
+                        modifier = GlanceModifier.defaultWeight(),
                     )
-                    Image(
-                        provider = ImageProvider(bitmap),
-                        contentDescription = null,
-                        contentScale = ContentScale.FillBounds,
-                        modifier = GlanceModifier.fillMaxWidth().height(sparkHeight),
+                    // 장중은 초록 점, 나머지는 회색 글자. 판단할 수 없으면 아무것도 없다.
+                    if (state != null) {
+                        if (state.status == MarketStatus.LIVE) {
+                            Text("●", style = style(LIVE_DOT.copy(alpha = alpha), 9), maxLines = 1)
+                        } else {
+                            Text(state.status.label, style = style(SUBTLE.copy(alpha = alpha), 9), maxLines = 1)
+                        }
+                    }
+                }
+                Text(formatPrice(quote.price), style = style(TEXT.copy(alpha = alpha), 14, bold = true), maxLines = 1)
+                Box(
+                    modifier = GlanceModifier.background(accent ?: tint)
+                        .cornerRadius(6.dp)
+                        .padding(horizontal = 4.dp, vertical = 1.dp),
+                ) {
+                    Text(
+                        formatChangeBadge(quote.change_pct),
+                        style = style(if (accent != null) TEXT else color.copy(alpha = alpha), 10, bold = true),
+                        maxLines = 1,
                     )
-                } else {
-                    Spacer(GlanceModifier.height(sparkHeight))
+                }
+                if (showSpark) {
+                    val density = LocalContext.current.resources.displayMetrics.density
+                    val sparkHeight = 18.dp
+                    Spacer(GlanceModifier.height(4.dp))
+                    // 큰 오늘 차트처럼 장 시작~끝 중 받은 시각까지만 그린다. 장 시간을 믿을 수 없으면 가로 전체로 늘린다.
+                    // 아직 점이 모자라면 타일 높이만 맞춘다.
+                    if (quote.intraday.size >= 2) {
+                        val bitmap = renderLine(
+                            values = quote.intraday,
+                            lineColor = color.toArgb(),
+                            backgroundColor = tileColor.toArgb(),
+                            widthPx = (tileWidth - 12.dp).toPx(density),
+                            heightPx = sparkHeight.toPx(density),
+                            strokePx = 1.5f * density,
+                            detailed = false,
+                            xPositions = tileXPositions(quote),
+                        )
+                        Image(
+                            provider = ImageProvider(bitmap),
+                            contentDescription = null,
+                            contentScale = ContentScale.FillBounds,
+                            modifier = GlanceModifier.fillMaxWidth().height(sparkHeight),
+                        )
+                    } else {
+                        Spacer(GlanceModifier.height(sparkHeight))
+                    }
                 }
             }
         }
     }
 }
 
+/** 기간 줄 끝 비교 버튼의 모양. 자동모드에서는 버튼을 숨긴다(null). */
+private enum class CompareButton { OFF, PICKING, ON }
+
+/**
+ * 고른 지표의 차트. other가 있고 두 지표의 날짜를 맞출 수 있으면 겹쳐 그린다(ComparePanel).
+ * 맞출 수 없거나 오늘 기간이면 주 지표만 그리고 두 번째 줄에 이유를 쓴다.
+ */
 @Composable
 private fun ChartPanel(
-    quote: Quote, period: Period, logScale: Boolean, auto: Boolean, width: Dp, height: Dp, modifier: GlanceModifier,
+    quote: Quote, other: Quote?, picking: Boolean, state: MarketState?, period: Period, logScale: Boolean, auto: Boolean,
+    width: Dp, height: Dp, modifier: GlanceModifier,
 ) {
+    val series = other?.let { compareSeries(quote, it, period) }
+    if (other != null && series != null) {
+        ComparePanel(quote, other, series, period, logScale, width, height, modifier)
+        return
+    }
     val values = chartValues(quote, period)
     val summary = chartSummary(values) ?: return
     // 오늘 차트는 전일 종가가 기준이고, 나머지는 기간 첫 값이 기준이다
@@ -428,6 +544,20 @@ private fun ChartPanel(
         xPositions = xAxis.positions,
         showXLabels = !showDrawdownChart,
     )
+    // 비교 안내. 고르는 중, 오늘 기간, 날짜를 맞출 수 없을 때 최저·최고 줄 자리에 쓴다.
+    val compareNotice = when {
+        picking -> "비교할 지표 타일을 누르세요"
+        other != null && today -> "비교는 1개월~MAX에서 보입니다"
+        other != null -> "두 지표의 날짜를 맞출 수 없어 비교를 그리지 않았습니다"
+        else -> null
+    }
+    val compareButton = when {
+        auto -> null
+        picking -> CompareButton.PICKING
+        other != null -> CompareButton.ON
+        else -> CompareButton.OFF
+    }
+    val stateText = state?.let { " · ${formatMarketState(it)}" }.orEmpty()
     // 차트나 머리줄을 누르면 닫는다. 기간 선택 줄은 따로 눌린다.
     val close = actionRunCallback<SelectQuoteAction>(actionParametersOf(QUOTE_ID to quote.id))
     Column(modifier = modifier.fillMaxWidth()) {
@@ -436,7 +566,7 @@ private fun ChartPanel(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(quote.name, style = style(TEXT, 13, bold = true))
-            Text("  ${period.label}", style = style(SUBTLE, 10))
+            Text("  ${period.label}$stateText", style = style(SUBTLE, 10), maxLines = 1)
             Spacer(GlanceModifier.defaultWeight())
             Box(modifier = GlanceModifier.background(tint).cornerRadius(6.dp).padding(horizontal = 6.dp, vertical = 2.dp)) {
                 Text(
@@ -445,10 +575,14 @@ private fun ChartPanel(
                 )
             }
         }
-        Text(
-            "최저 ${formatPrice(summary.min)}  ·  최고 ${formatPrice(summary.max)}" + if (auto) "" else "  ·  누르면 닫기",
-            style = style(SUBTLE, 10),
-        )
+        if (compareNotice != null) {
+            Text(compareNotice, style = style(COMPARE_LINE, 10), maxLines = 1)
+        } else {
+            Text(
+                "최저 ${formatPrice(summary.min)}  ·  최고 ${formatPrice(summary.max)}" + if (auto) "" else "  ·  누르면 닫기",
+                style = style(SUBTLE, 10),
+            )
+        }
         if (drawdown != null) {
             Text(
                 "고점 대비 ${formatDrawdown(drawdown.current)}  ·  MDD ${formatDrawdown(drawdown.mdd)}",
@@ -483,7 +617,62 @@ private fun ChartPanel(
             Spacer(GlanceModifier.defaultWeight())
             Text("현재 ${formatPrice(quote.price)}", style = style(color, 10, bold = true))
         }
-        PeriodSelector(period, logScale)
+        PeriodSelector(period, logScale, compareButton)
+    }
+}
+
+/**
+ * 두 지표 겹쳐 보기. 공통 시작일을 100으로 맞춘 두 선을 한 차트에 그린다.
+ * 최저·최고, 고점 대비, 낙폭 차트와 사건 표시는 한 지표에 대한 값이라 숨기고 그 자리에 범례를 둔다.
+ */
+@Composable
+private fun ComparePanel(
+    quote: Quote, other: Quote, series: CompareSeries, period: Period, logScale: Boolean,
+    width: Dp, height: Dp, modifier: GlanceModifier,
+) {
+    val density = LocalContext.current.resources.displayMetrics.density
+    // 차트 그림 높이 = 칸 높이 - 위 두 줄(이름·범례) - 아래 두 줄(시작일, 기간 선택)
+    val imageHeight = maxOf(40.dp, height - 84.dp)
+    // 로그는 두 선 모두 시작 대비 배수의 지수다. 0 이하 값이 있으면 일반 눈금으로 그린다.
+    val log = if (logScale && period.supportsLog) compareLogChart(series.primary, series.other) else null
+    val axisLabel: (Double) -> String = if (log != null) ::formatPowerOfTen else ::formatIndex
+    val bitmap = detailBitmap(
+        log?.primary ?: series.primary, TEXT, width.toPx(density), imageHeight.toPx(density), MAX_CHART_PIXELS, density,
+        if (log != null) 0.0 else COMPARE_BASE, "시작 100",
+        axisLabel, null, log?.axis,
+        xTicks = dateTicks(series.dates, series.primary.size, period),
+        secondValues = log?.other ?: series.other,
+        secondColor = COMPARE_LINE,
+    )
+    val primaryLast = series.primary.last()
+    val otherLast = series.other.last()
+    val close = actionRunCallback<SelectQuoteAction>(actionParametersOf(QUOTE_ID to quote.id))
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = GlanceModifier.fillMaxWidth().clickable(close),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("${quote.name} vs ${other.name}", style = style(TEXT, 13, bold = true), maxLines = 1)
+            Text("  ${period.label}", style = style(SUBTLE, 10), maxLines = 1)
+        }
+        // 범례: 선 색으로 이름과 값, 괄호 안 등락은 상승 빨강·하락 파랑
+        Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("━ ${quote.name} ${formatLegendValue(primaryLast)}", style = style(TEXT, 10, bold = true), maxLines = 1)
+            Text(" (${formatLegendChange(primaryLast)})", style = style(trendColors(legendChangePct(primaryLast)).first, 10), maxLines = 1)
+            Text("   ━ ${other.name} ${formatLegendValue(otherLast)}", style = style(COMPARE_LINE, 10, bold = true), maxLines = 1)
+            Text(" (${formatLegendChange(otherLast)})", style = style(trendColors(legendChangePct(otherLast)).first, 10), maxLines = 1)
+        }
+        Spacer(GlanceModifier.height(4.dp))
+        Image(
+            provider = ImageProvider(bitmap),
+            contentDescription = "${quote.name}와 ${other.name} ${period.label} 비교 차트",
+            contentScale = ContentScale.FillBounds,
+            modifier = GlanceModifier.fillMaxWidth().defaultWeight().clickable(close),
+        )
+        Row(modifier = GlanceModifier.fillMaxWidth().padding(top = 2.dp)) {
+            Text(formatCompareStart(series.dates.first(), period), style = style(SUBTLE, 10))
+        }
+        PeriodSelector(period, logScale, CompareButton.ON)
     }
 }
 
@@ -495,6 +684,8 @@ private fun detailBitmap(
     xTicks: List<XTick> = emptyList(),
     xPositions: List<Float>? = null,
     showXLabels: Boolean = true,
+    secondValues: List<Double>? = null,
+    secondColor: Color = TEXT,
 ): Bitmap {
     val (bw, bh) = fitBitmap(fullW, fullH, maxPixels)
     val scale = bw.toFloat() / fullW
@@ -517,12 +708,17 @@ private fun detailBitmap(
         xTicks = xTicks,
         xPositions = xPositions,
         showXLabels = showXLabels,
+        secondValues = secondValues,
+        secondColor = secondColor.toArgb(),
     )
 }
 
-/** 차트 아래 라디오 버튼 줄. 누르면 바로 그 기간으로 바뀐다. 5년·MAX에서는 끝에 로그 버튼이 나온다. */
+/**
+ * 차트 아래 라디오 버튼 줄. 누르면 바로 그 기간으로 바뀐다. 5년·MAX에서는 끝에 로그 버튼이 나온다.
+ * compareButton이 있으면 맨 끝에 비교 버튼을 둔다. 자식은 라디오 6개와 버튼 2개로 Glance 한도(10개) 안이다.
+ */
 @Composable
-private fun PeriodSelector(current: Period, logScale: Boolean) {
+private fun PeriodSelector(current: Period, logScale: Boolean, compareButton: CompareButton?) {
     val colors = RadioButtonDefaults.colors(
         checkedColor = ColorProvider(DOWN),
         uncheckedColor = ColorProvider(SUBTLE),
@@ -546,6 +742,22 @@ private fun PeriodSelector(current: Period, logScale: Boolean) {
                     .clickable(actionRunCallback<ToggleLogAction>()),
             ) {
                 Text("로그", style = style(if (logScale) TEXT else SUBTLE, 11, bold = logScale))
+            }
+        }
+        if (compareButton != null) {
+            val on = compareButton != CompareButton.OFF
+            Box(
+                modifier = GlanceModifier.padding(start = 4.dp)
+                    .background(if (on) DOWN else TILE)
+                    .cornerRadius(6.dp)
+                    .padding(horizontal = 6.dp, vertical = 1.dp)
+                    .clickable(actionRunCallback<ToggleCompareAction>()),
+            ) {
+                Text(
+                    if (compareButton == CompareButton.ON) "비교 ✕" else "비교",
+                    style = style(if (on) TEXT else SUBTLE, 11, bold = on),
+                    maxLines = 1,
+                )
             }
         }
     }

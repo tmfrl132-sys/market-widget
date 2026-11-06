@@ -27,6 +27,8 @@ import com.tmfrl.marketwidget.model.yPosition
  * marks는 점에 붙일 문구(값 목록 위치와 문구),
  * xTicks는 가로축 눈금(세로 보조선을 그리고 아래쪽에 글자 띠를 잡는다), xPositions는 점마다의 가로 위치 0~1(없으면 고르게 놓는다),
  * showXLabels가 false면 세로 보조선만 그리고 글자 띠를 잡지 않는다.
+ * secondValues는 겹쳐 그릴 두 번째 선(detailed일 때만, 두 지표 비교)이고 secondColor는 그 색이다.
+ * 두 번째 선이 있으면 영역 채우기를 끄고, 세로축은 두 선과 기준값을 함께 넣어 정한다. 두 번째 선을 먼저 그려 주 선이 위에 온다.
  */
 fun renderLine(
     values: List<Double>,
@@ -47,6 +49,8 @@ fun renderLine(
     xTicks: List<XTick> = emptyList(),
     xPositions: List<Float>? = null,
     showXLabels: Boolean = true,
+    secondValues: List<Double>? = null,
+    secondColor: Int = 0,
 ): Bitmap {
     val w = widthPx.coerceAtLeast(2)
     val h = heightPx.coerceAtLeast(2)
@@ -55,7 +59,8 @@ fun renderLine(
     canvas.drawColor(backgroundColor)
 
     // 점선과 영역 기준값도 눈금 범위 안에 들어와야 한다
-    val axis = if (detailed) fixedAxis ?: yAxisFor(values + listOfNotNull(baseline, areaBase)) else null
+    val second = if (detailed) secondValues else null
+    val axis = if (detailed) fixedAxis ?: yAxisFor(values + second.orEmpty() + listOfNotNull(baseline, areaBase)) else null
     val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = textColor
         textSize = textPx
@@ -83,11 +88,9 @@ fun renderLine(
         xLabels.forEach { canvas.drawLine(it.x, 0f, it.x, plotH, grid) }
     }
 
-    val line = Path().apply {
-        moveTo(points[0].first, points[0].second)
-        points.drop(1).forEach { (x, y) -> lineTo(x, y) }
-    }
-    if (detailed) {
+    val line = linePath(points)
+    val secondPoints = second?.let { chartPoints(it, plotW, plotH, pad, axis, xPositions) }.orEmpty()
+    if (detailed && second == null) {
         val floor = if (axis != null && areaBase != null) {
             yPosition(areaBase, axis.min, axis.max, plotH, pad)
         } else {
@@ -106,18 +109,11 @@ fun renderLine(
         })
     }
     if (axis != null && baseline != null) drawBaseline(canvas, baseline, axis, text, plotW, plotH, pad, strokePx)
-    canvas.drawPath(line, Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        color = lineColor
-        strokeWidth = strokePx
-        strokeJoin = Paint.Join.ROUND
-        strokeCap = Paint.Cap.ROUND
-    })
+    if (secondPoints.isNotEmpty()) canvas.drawPath(linePath(secondPoints), strokePaint(secondColor, strokePx))
+    canvas.drawPath(line, strokePaint(lineColor, strokePx))
     if (detailed) {
-        val (x, y) = points.last()
-        val dot = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = lineColor }
-        canvas.drawCircle(x, y, strokePx * 2.2f, dot)
-        canvas.drawCircle(x, y, strokePx * 1.1f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = backgroundColor })
+        if (secondPoints.isNotEmpty()) drawEndDot(canvas, secondPoints.last(), secondColor, backgroundColor, strokePx)
+        drawEndDot(canvas, points.last(), lineColor, backgroundColor, strokePx)
         if (axis != null && baseline != null) {
             drawBaselineLabel(canvas, baselineLabel, baseline, values.last(), axis, text, backgroundColor, plotW, plotH, pad)
         }
@@ -128,6 +124,26 @@ fun renderLine(
         }
     }
     return bitmap
+}
+
+private fun linePath(points: List<Pair<Float, Float>>) = Path().apply {
+    moveTo(points[0].first, points[0].second)
+    points.drop(1).forEach { (x, y) -> lineTo(x, y) }
+}
+
+private fun strokePaint(lineColor: Int, strokePx: Float) = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    style = Paint.Style.STROKE
+    color = lineColor
+    strokeWidth = strokePx
+    strokeJoin = Paint.Join.ROUND
+    strokeCap = Paint.Cap.ROUND
+}
+
+/** 마지막 값 점. 선 색 원 안에 배경색 원을 겹친다. */
+private fun drawEndDot(canvas: Canvas, point: Pair<Float, Float>, lineColor: Int, backgroundColor: Int, strokePx: Float) {
+    val (x, y) = point
+    canvas.drawCircle(x, y, strokePx * 2.2f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = lineColor })
+    canvas.drawCircle(x, y, strokePx * 1.1f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = backgroundColor })
 }
 
 /** 가로축 글자 띠의 높이, 글자 아래 여백, 글자 사이 최소 간격. 글자 크기의 배수다. */
