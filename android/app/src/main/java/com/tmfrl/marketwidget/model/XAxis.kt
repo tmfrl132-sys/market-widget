@@ -141,6 +141,13 @@ fun todayXAxis(valueCount: Int, times: List<Long>, start: Long?, end: Long?): Ch
 }
 
 /**
+ * 시세 타일 작은 차트의 점 위치(0~1). 큰 오늘 차트와 같은 todayXAxis 위치를 쓴다.
+ * 장 시간을 믿을 수 없거나 시각이 없으면 null이고, 그러면 지금처럼 가로 전체에 고르게 놓는다.
+ */
+fun tileXPositions(quote: Quote): List<Float>? =
+    todayXAxis(quote.intraday.size, quote.intraday_times, quote.session_start, quote.session_end).positions
+
+/**
  * 고른 기간의 가로축. MAX의 낙폭 차트도 이 눈금을 쓴다.
  * max_drawdowns는 묶음마다 1점이라 max_dates와 개수가 다르지만 같은 기간을 같은 비율로 덮는다.
  */

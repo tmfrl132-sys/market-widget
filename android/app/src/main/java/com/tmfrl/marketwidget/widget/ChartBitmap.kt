@@ -21,7 +21,7 @@ import com.tmfrl.marketwidget.model.yPosition
  * 선 그래프를 비트맵으로 그린다. 위젯(RemoteViews)은 직접 그리기를 못 해서 그림으로 붙인다.
  * 위젯 전송 크기 제한(약 1MB)이 있어 배경을 칠하고 RGB_565(픽셀당 2바이트)로 만든다.
  * detailed는 큰 차트용: 오른쪽 세로축 숫자와 눈금선, 기준값 점선, 영역 채우기, 마지막 값 점.
- * 아래 인자는 detailed일 때만 쓴다.
+ * 아래 인자는 xPositions만 빼고 detailed일 때만 쓴다. xPositions는 작은 차트에서도 점의 가로 위치로 쓴다.
  * baseline은 점선 값(없으면 점선 없음), baselineLabel은 점선 문구, axisLabel은 세로축 숫자 형식,
  * areaBase는 영역을 채울 기준값(없으면 차트 바닥까지), fixedAxis는 정해 둔 세로축(없으면 값으로 계산),
  * marks는 점에 붙일 문구(값 목록 위치와 문구),
@@ -63,14 +63,15 @@ fun renderLine(
     // 세로축 숫자가 들어갈 오른쪽 칸. 선이 숫자와 겹치지 않게 그림 영역과 나눈다.
     val gutter = axis?.ticks?.maxOf { text.measureText(axisLabel(it)) }?.plus(textPx * 0.6f) ?: 0f
     val plotW = (w - gutter).coerceAtLeast(2f)
-    // 가로축 글자가 들어갈 아래쪽 띠. 세로 계산은 띠를 뺀 높이 안에서 한다. 작은 차트는 눈금과 가로 위치를 무시한다.
+    // 가로축 글자가 들어갈 아래쪽 띠. 세로 계산은 띠를 뺀 높이 안에서 한다. 작은 차트는 눈금을 무시해 띠와 세로선이 없다.
     val ticks = if (detailed) xTicks else emptyList()
     val band = if (ticks.isEmpty() || !showXLabels) 0f else textPx * X_BAND_LINES
     val plotH = (h - band).coerceAtLeast(2f)
 
     // 점과 위아래 끝 눈금 숫자가 잘리지 않게 여백을 둔다
     val pad = if (detailed) maxOf(strokePx * 3, textPx * 0.6f) else strokePx
-    val points = chartPoints(values, plotW, plotH, pad, axis, if (detailed) xPositions else null)
+    // 가로 위치는 작은 차트도 따른다. 타일도 장 시작~끝 중 지금까지만 그린다.
+    val points = chartPoints(values, plotW, plotH, pad, axis, xPositions)
     if (points.isEmpty()) return bitmap
 
     if (axis != null) drawAxis(canvas, axis, axisLabel, text, plotW, w.toFloat(), plotH, pad, strokePx)

@@ -84,6 +84,7 @@ import com.tmfrl.marketwidget.model.Period
 import com.tmfrl.marketwidget.model.XTick
 import com.tmfrl.marketwidget.model.chartValues
 import com.tmfrl.marketwidget.model.chartXAxis
+import com.tmfrl.marketwidget.model.tileXPositions
 import com.tmfrl.marketwidget.model.parsePeriod
 import com.tmfrl.marketwidget.model.eventRows
 import com.tmfrl.marketwidget.model.fitBitmap
@@ -364,7 +365,8 @@ private fun QuoteTile(quote: Quote, selected: Boolean, showSpark: Boolean, tileW
                 val density = LocalContext.current.resources.displayMetrics.density
                 val sparkHeight = 18.dp
                 Spacer(GlanceModifier.height(4.dp))
-                // 그 시장의 최근 장 시작부터 받은 시각까지만 그린다. 아직 점이 모자라면 타일 높이만 맞춘다.
+                // 큰 오늘 차트처럼 장 시작~끝 중 받은 시각까지만 그린다. 장 시간을 믿을 수 없으면 가로 전체로 늘린다.
+                // 아직 점이 모자라면 타일 높이만 맞춘다.
                 if (quote.intraday.size >= 2) {
                     val bitmap = renderLine(
                         values = quote.intraday,
@@ -374,6 +376,7 @@ private fun QuoteTile(quote: Quote, selected: Boolean, showSpark: Boolean, tileW
                         heightPx = sparkHeight.toPx(density),
                         strokePx = 1.5f * density,
                         detailed = false,
+                        xPositions = tileXPositions(quote),
                     )
                     Image(
                         provider = ImageProvider(bitmap),

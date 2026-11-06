@@ -332,6 +332,51 @@ class XAxisTest {
         assertEquals(listOf(0f, 1f), todayXAxis(2, times, seoul(5, 9), seoul(5, 15)).positions)
     }
 
+    // 시세 타일 작은 차트: 큰 오늘 차트와 같은 위치, 믿을 수 없으면 null(가로 전체)
+
+    private fun tile(intraday: List<Double>, times: List<Long>, start: Long?, end: Long?) = Quote(
+        "GSPC", "S&P500", 1.0, 0.0, 0.0,
+        intraday = intraday, intraday_times = times, session_start = start, session_end = end,
+    )
+
+    @Test fun tileXPositions_usOpenTwoBarsStayAtLeft() {
+        // 2026-11-06 23:38 캡처: 개장 직후 점 2개가 가로 전체로 늘어나 직선처럼 보였다
+        val q = tile(listOf(1.0, 2.0), listOf(seoul(6, 23, 30), seoul(6, 23, 35)), seoul(6, 23, 30), seoul(7, 6))
+        val positions = tileXPositions(q)!!
+        assertEquals(0f, positions[0], 0f)
+        assertEquals(0.0128f, positions[1], 0.0001f)
+    }
+
+    @Test fun tileXPositions_kospiMorningMatchesTodayChart() {
+        val q = tile(
+            listOf(1.0, 2.0, 3.0), listOf(seoul(5, 9), seoul(5, 10), seoul(5, 11)), seoul(5, 9), seoul(5, 15, 30),
+        )
+        val positions = tileXPositions(q)!!
+        assertEquals(3, positions.size)
+        assertEquals(0f, positions[0], 0f)
+        assertEquals(0.1538f, positions[1], 0.0001f)
+        assertEquals(0.3077f, positions[2], 0.0001f)
+        assertEquals(chartXAxis(q, Period.TODAY).positions, positions)
+    }
+
+    @Test fun tileXPositions_withoutTimesSpreadsFullWidth() {
+        // 옛 캐시
+        assertNull(tileXPositions(tile(listOf(1.0, 2.0), emptyList(), null, null)))
+        // 시각은 있는데 장 시간이 없음
+        assertNull(tileXPositions(tile(listOf(1.0, 2.0), listOf(seoul(5, 9), seoul(5, 10)), null, null)))
+        // 시각 개수가 값과 다름
+        assertNull(tileXPositions(tile(listOf(1.0, 2.0, 3.0), listOf(seoul(5, 9), seoul(5, 10)), seoul(5, 9), seoul(5, 15))))
+    }
+
+    @Test fun tileXPositions_moreThanHalfOutsideSpreadsFullWidth() {
+        val times = listOf(seoul(6, 9), seoul(6, 10), seoul(6, 11))
+        assertNull(tileXPositions(tile(listOf(1.0, 2.0, 3.0), times, seoul(9, 9), seoul(9, 15, 30))))
+    }
+
+    @Test fun tileXPositions_singleBarHasNoPositions() {
+        assertNull(tileXPositions(tile(listOf(1.0), listOf(seoul(5, 9)), seoul(5, 9), seoul(5, 15, 30))))
+    }
+
     @Test fun chartXAxis_oldCacheTodayHasNoAxis() {
         val q = Quote("KS11", "코스피", 1.0, 0.0, 0.0, intraday = listOf(1.0, 2.0))
         assertEquals(ChartXAxis(), chartXAxis(q, Period.TODAY))
