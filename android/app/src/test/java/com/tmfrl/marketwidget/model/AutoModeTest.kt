@@ -26,11 +26,11 @@ class AutoModeTest {
         assertNull(nextAutoQuote("KS11", emptyList()))
     }
 
-    @Test fun next_visitsAllTenThenRepeats() {
-        val ten = LIVE_SYMBOLS.keys.toList()
+    @Test fun next_visitsAllThenRepeats() {
+        val all = LIVE_SYMBOLS.keys.toList()
         var current: String? = null
-        val visited = (1..11).map { nextAutoQuote(current, ten).also { current = it } }
-        assertEquals(ten + ten.first(), visited)
+        val visited = (0..all.size).map { nextAutoQuote(current, all).also { current = it } }
+        assertEquals(all + all.first(), visited)
     }
 
     @Test fun ids_skipQuotesWithoutChart() {
