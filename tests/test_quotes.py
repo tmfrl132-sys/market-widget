@@ -265,7 +265,7 @@ def test_event_marks_at_deepest_point_in_window():
     dates = [date(2020, 1, 15), date(2020, 2, 20), date(2020, 3, 23), date(2020, 4, 20), date(2020, 6, 1)]
     depths = [0.0, -10.0, -34.04, -20.0, -50.0]
     assert quotes.event_marks("GSPC", dates, depths, size=1) == [
-        {"label": "코로나", "index": 2, "depth": -34.0}]
+        {"label": "코로나", "index": 2, "depth": -34.0, "date": "2020-03-23"}]
 
 
 def test_event_marks_skips_shallow_drop():
@@ -633,3 +633,165 @@ def test_failed_from_start_has_default_and_table_fields():
     assert result["BTC"]["market_tz"] == "UTC"
     assert result["BTC"]["always_open"] is True
     assert result["DXY"]["big_move_pct"] == 0.7
+
+
+# ---- v1.0: MDD 구간, 남길 점, max_depths ----
+
+import math
+
+
+def s_series():
+    return [round(100 + 40 * math.sin(i / 37) + 0.08 * i - (30 if 700 <= i < 760 else 0), 2) for i in range(1200)]
+
+
+@pytest.mark.parametrize("closes, expected", [
+    ([100, 110, 105, 120, 90, 95, 121, 80, 100], (6, 7, None, -33.9)),
+    ([100, 101, 102, 103], None),
+    ([100, 120, 60, 80, 110], (1, 2, None, -50.0)),
+    ([100, 120, 60, 80, 125], (1, 2, 4, -50.0)),
+    ([100, 120, 90, 120, 100, 130], (1, 2, 3, -25.0)),
+    ([100, 90], (0, 1, None, -10.0)),
+    ([50], None),
+])
+def test_drawdown_episode_fixed_values(closes, expected):
+    assert quotes.drawdown_episode(closes) == expected
+
+
+def test_s_series_fixed_values():
+    s = s_series()
+    assert quotes._bucket_size(len(s)) == 5
+    assert len(quotes.thin_indices(s)) == 482
+    assert quotes.drawdown_episode(s) == (61, 171, 257, -49.0)
+    picks = quotes.max_picks(s, [61, 171, 257])
+    assert len(picks) == 483
+    assert picks[:10] == [0, 0, 4, 5, 9, 10, 14, 15, 19, 20]
+    assert picks[-5:] == [1190, 1194, 1195, 1199, 1199]
+    assert picks == sorted(picks)
+
+
+def test_max_picks_keeps_duplicates_and_ignores_present_extras():
+    assert quotes.max_picks([1.0, 3.0, 2.0], [1, 1]) == [0, 1, 2]
+
+
+def s_payload(closes=None, tz="Asia/Seoul", start=1100000000):
+    closes = s_series() if closes is None else closes
+    return {"chart": {"result": [{
+        "meta": {"gmtoffset": 32400, "exchangeTimezoneName": tz},
+        "timestamp": [start + i * 86400 for i in range(len(closes))],
+        "indicators": {"quote": [{"close": closes}]},
+    }]}}
+
+
+def test_max_fields_depths_align_with_closes_and_include_episode():
+    f = quotes.max_fields(s_payload(), True, "")
+    assert len(f["max_depths"]) == len(f["max_closes"]) == len(f["max_dates"]) == 483
+    assert min(f["max_depths"]) == f["mdd"] == -49.0
+    assert f["max_depths"][f["max_dates"].index(f["mdd_trough_date"])] == -49.0
+    assert f["mdd_peak_date"] in f["max_dates"]
+    assert f["mdd_recovery_date"] in f["max_dates"]
+    assert f["max_depths"][f["max_dates"].index(f["mdd_peak_date"])] == 0.0
+
+
+def test_max_fields_old_app_fields_unchanged_by_extra_points():
+    f = quotes.max_fields(s_payload(), True, "")
+    depths = quotes.drawdowns(s_series())
+    assert f["max_drawdowns"] == [round(min(depths[i:i + 5]), 1) for i in range(0, 1200, 5)]
+    assert f["peak"] == round(max(s_series()), 2)
+
+
+def test_max_fields_depths_come_from_full_daily_series_not_thinned():
+    f = quotes.max_fields(s_payload(), True, "")
+    full = quotes.drawdowns(s_series())
+    picks = quotes.max_picks(s_series(), [61, 171, 257])
+    assert f["max_depths"] == [round(full[i], 1) for i in picks]
+
+
+def test_max_fields_unrecovered_has_no_recovery_date():
+    f = quotes.max_fields(max_payload([100.0, 120.0, 60.0, 80.0]), True, "")
+    assert f["mdd_peak_date"] and f["mdd_trough_date"]
+    assert f["mdd_recovery_date"] is None
+
+
+def test_max_fields_no_drawdown_episode_has_null_dates():
+    f = quotes.max_fields(max_payload([100.0, 101.0, 102.0]), True, "")
+    assert f["max_depths"] == [0.0, 0.0, 0.0]
+    assert f["mdd"] == 0.0
+    assert f["mdd_peak_date"] is f["mdd_trough_date"] is f["mdd_recovery_date"] is None
+
+
+def test_max_fields_no_drawdown_indicator_has_empty_depths_and_dates():
+    f = quotes.max_fields(s_payload(), False, "")
+    assert f["max_depths"] == []
+    assert f["mdd_peak_date"] is f["mdd_trough_date"] is f["mdd_recovery_date"] is None
+    assert len(f["max_closes"]) == 482
+
+
+def test_event_marks_have_date_of_deepest_day():
+    dates = [date(1998, 1, 1), date(1998, 6, 16), date(1998, 8, 1)]
+    marks = quotes.event_marks("KS11", dates, [-10.0, -64.7, -30.0], size=1)
+    assert marks == [{"label": "외환위기", "index": 1, "depth": -64.7, "date": "1998-06-16"}]
+
+
+def test_ks11_event_date_is_in_max_dates_and_depth_matches():
+    closes = [100.0] * 600
+    closes[300] = 50.0
+    start = 867715200  # 1997-07-01 00:00 UTC
+    f = quotes.max_fields(s_payload(closes, start=start), True, "KS11")
+    ev = f["max_events"][0]
+    assert ev["label"] == "외환위기"
+    assert ev["date"] in f["max_dates"]
+    assert f["max_depths"][f["max_dates"].index(ev["date"])] == ev["depth"] == -50.0
+    assert ev["index"] == 300 // quotes._bucket_size(600)
+
+
+def test_max_failure_passes_previous_new_fields():
+    def get(url, **kwargs):
+        if "period1=" in url:
+            raise requests.ConnectionError("down")
+        return FakeResponse(FIXTURE)
+
+    prev = {"KS11": {"id": "KS11", "max_closes": [1.0, 2.0, 3.0], "max_dates": ["2000-01-01"] * 3,
+                     "max_depths": [0.0, -5.0, -1.0], "mdd_peak_date": "2000-01-01",
+                     "mdd_trough_date": "2000-01-01", "mdd_recovery_date": None}}
+    ks11 = next(q for q in quotes.fetch_quotes(prev, get=get) if q["id"] == "KS11")
+    assert ks11["max_depths"] == [0.0, -5.0, -1.0]
+    assert ks11["mdd_peak_date"] == "2000-01-01" and ks11["mdd_trough_date"] == "2000-01-01"
+    assert ks11["mdd_recovery_date"] is None
+
+
+def test_max_failure_clears_previous_depths_when_length_differs():
+    def get(url, **kwargs):
+        if "period1=" in url:
+            raise requests.ConnectionError("down")
+        return FakeResponse(FIXTURE)
+
+    prev = {"KS11": {"id": "KS11", "max_closes": [1.0, 2.0, 3.0], "max_dates": ["2000-01-01"] * 3,
+                     "max_depths": [0.0, -5.0]}}
+    ks11 = next(q for q in quotes.fetch_quotes(prev, get=get) if q["id"] == "KS11")
+    assert ks11["max_depths"] == []
+
+
+def test_max_failure_without_previous_has_empty_new_fields():
+    def get(url, **kwargs):
+        if "period1=" in url:
+            raise requests.ConnectionError("down")
+        return FakeResponse(FIXTURE)
+
+    ks11 = next(q for q in quotes.fetch_quotes({}, get=get) if q["id"] == "KS11")
+    assert ks11["max_depths"] == []
+    assert ks11["mdd_peak_date"] is ks11["mdd_trough_date"] is ks11["mdd_recovery_date"] is None
+
+
+def test_failed_from_start_has_empty_new_fields():
+    items = quotes.fetch_quotes({}, get=failing_get)
+    for q in items:
+        assert q["max_depths"] == []
+        assert q["mdd_peak_date"] is q["mdd_trough_date"] is q["mdd_recovery_date"] is None
+
+
+def test_stale_from_old_cache_without_new_fields_gets_empty_defaults():
+    prev = {"KS11": {"id": "KS11", "name": "코스피", "price": 1.0, "max_closes": [1.0]}}
+    ks11 = next(q for q in quotes.fetch_quotes(prev, get=failing_get) if q["id"] == "KS11")
+    assert ks11["stale"] is True
+    assert ks11["max_depths"] == []
+    assert ks11["mdd_peak_date"] is ks11["mdd_trough_date"] is ks11["mdd_recovery_date"] is None

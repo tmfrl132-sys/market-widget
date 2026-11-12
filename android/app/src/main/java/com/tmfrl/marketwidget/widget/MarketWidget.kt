@@ -22,6 +22,7 @@ import androidx.glance.LocalContext
 import androidx.glance.LocalSize
 import androidx.glance.action.ActionParameters
 import androidx.glance.action.actionParametersOf
+import androidx.glance.action.actionStartActivity
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetManager
@@ -49,7 +50,10 @@ import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
+import com.tmfrl.marketwidget.MainActivity
+import com.tmfrl.marketwidget.data.CustomRepository
 import com.tmfrl.marketwidget.data.Repository
+import com.tmfrl.marketwidget.data.SettingsStore
 import com.tmfrl.marketwidget.model.ChartSelection
 import com.tmfrl.marketwidget.model.CompareSeries
 import com.tmfrl.marketwidget.model.Event
@@ -68,7 +72,14 @@ import com.tmfrl.marketwidget.model.compareSeries
 import com.tmfrl.marketwidget.model.dateTicks
 import com.tmfrl.marketwidget.model.detailMinHeightDp
 import com.tmfrl.marketwidget.model.flagOf
-import com.tmfrl.marketwidget.model.drawdownSummary
+import com.tmfrl.marketwidget.model.chartDates
+import com.tmfrl.marketwidget.model.commonGutter
+import com.tmfrl.marketwidget.model.drawdownChart
+import com.tmfrl.marketwidget.model.formatEpisode
+import com.tmfrl.marketwidget.model.sanitizeSelection
+import com.tmfrl.marketwidget.model.sparkMaxPixels
+import com.tmfrl.marketwidget.model.visibleQuotes
+import com.tmfrl.marketwidget.model.yAxisFor
 import com.tmfrl.marketwidget.model.formatAxisPct
 import com.tmfrl.marketwidget.model.formatChangeBadge
 import com.tmfrl.marketwidget.model.formatCompareStart
@@ -115,8 +126,11 @@ private val EVENT_ROW_HEIGHT = 24.dp
 /** 차트 비트맵 픽셀 상한. RGB_565라 약 500KB. */
 private const val MAX_CHART_PIXELS = 250_000
 
-/** 이 높이보다 낮으면 MAX에서 낙폭 차트를 빼고 가격 차트만 보여준다. */
+/** 이 높이보다 낮으면 잠수 차트를 빼고 가격 차트(구간 칠과 고점·바닥 점)만 보여준다. */
 private val MIN_STACKED_HEIGHT = 140.dp
+
+/** 차트 그림 높이 중 아래 잠수 차트가 차지하는 비율. 가격 차트를 우선한다. */
+private const val UNDERWATER_SHARE = 0.35f
 
 // 어두운 카드 디자인. 상승 빨강·하락 파랑은 어두운 배경에서 잘 보이게 밝게 잡았다.
 private val BACKGROUND = Color(0xFF111827)
@@ -129,6 +143,9 @@ private val DOWN = Color(0xFF4D8DFF)
 private val UP_TINT = Color(0x33FF5A5F)
 private val DOWN_TINT = Color(0x334D8DFF)
 private val FLAT_TINT = Color(0x338B95A7)
+
+/** 최대 낙폭 구간 칠. 하락 파랑을 약 12% 알파로 옅게 깐다. */
+private val EPISODE_SHADE = Color(0x1F4D8DFF)
 
 /** 장중 점. 빨강·파랑은 등락 전용이라 초록을 쓴다. */
 private val LIVE_DOT = Color(0xFF34D399)
@@ -173,18 +190,33 @@ private fun MutablePreferences.setSelection(s: ChartSelection) {
     if (s.picking) this[COMPARE_PICKING] = true else remove(COMPARE_PICKING)
 }
 
+/**
+ * 위젯에 그릴 데이터. data.json 캐시의 기본 지표와 추가 종목 캐시를 설정(켜기·순서)대로 합친다.
+ * data.json 캐시가 없으면 null이다(추가 종목만으로는 그리지 않는다. 기본 지표 캐시는 첫 갱신에서 바로 생긴다).
+ */
+private fun widgetData(context: Context): MarketData? {
+    val data = Repository.forContext(context).cached() ?: return null
+    val settings = SettingsStore.forContext(context).read()
+    return data.copy(quotes = visibleQuotes(data.quotes, CustomRepository.forContext(context).cached(), settings))
+}
+
+/** 지금 위젯에 보이는 지표. 액션에서 선택 상태를 정리할 때 쓴다. */
+private fun visibleQuotesFor(context: Context): List<Quote> = widgetData(context)?.quotes.orEmpty()
+
 class MarketWidget : GlanceAppWidget() {
     // 실제 크기로 그려야 위젯을 늘린 만큼 차트·일정 칸이 커진다
     override val sizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val repository = Repository.forContext(context)
         provideContent {
-            // 상태를 읽어 두면 DATA_VERSION·SELECTED·PERIOD가 바뀔 때마다 다시 그리면서 캐시를 새로 읽는다
+            // 상태를 읽어 두면 DATA_VERSION·SELECTED·PERIOD가 바뀔 때마다 다시 그리면서 캐시와 설정을 새로 읽는다
             val state = currentState<Preferences>()
             state[DATA_VERSION]
+            val data = widgetData(context)
+            // 꺼지거나 지운 지표를 가리키는 선택은 그릴 때 정리한다. 저장된 상태는 다음 액션 때 덮인다.
+            val selection = if (data == null) state.selection() else sanitizeSelection(state.selection(), data.quotes.map { it.id })
             WidgetContent(
-                repository.cached(), ZonedDateTime.now(), state.selection(), parsePeriod(state[PERIOD]),
+                data, ZonedDateTime.now(), selection, parsePeriod(state[PERIOD]),
                 state[LOG_SCALE] == true, state[AUTO] == true,
             )
         }
@@ -233,10 +265,11 @@ suspend fun redrawAllWidgets(context: Context) {
 class SelectQuoteAction : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
         val tapped = parameters[QUOTE_ID] ?: return
+        val visible = visibleQuotesFor(context).map { it.id }
         var auto = false
         updateAppWidgetState(context, glanceId) { prefs ->
             auto = prefs[AUTO] == true
-            prefs.setSelection(afterTileTap(prefs.selection(), tapped, auto))
+            prefs.setSelection(afterTileTap(sanitizeSelection(prefs.selection(), visible), tapped, auto))
         }
         MarketWidget().update(context, glanceId)
         if (auto) AutoTick.schedule(context)
@@ -246,17 +279,19 @@ class SelectQuoteAction : ActionCallback {
 /** 자동 버튼. 켜면 비교를 끄고 첫 종목부터 돌고, 끄면 켜기 전 화면으로 돌아간다. */
 class ToggleAutoAction : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
-        val quotes = Repository.forContext(context).cached()?.quotes.orEmpty()
+        val quotes = visibleQuotesFor(context)
+        val visible = quotes.map { it.id }
         updateAppWidgetState(context, glanceId) { prefs ->
             if (prefs[AUTO] == true) {
                 prefs.remove(AUTO)
-                prefs.setSelected(prefs[SAVED_SELECTED])
+                // 켜기 전 지표가 그사이 꺼졌으면 일정 화면으로 돌아간다
+                prefs.setSelected(prefs[SAVED_SELECTED]?.takeIf { it in visible })
                 prefs.remove(SAVED_SELECTED)
             } else {
                 prefs[AUTO] = true
                 prefs[SELECTED]?.let { prefs[SAVED_SELECTED] = it }
                 val first = nextAutoQuote(null, autoQuoteIds(quotes, parsePeriod(prefs[PERIOD])))
-                prefs.setSelection(afterAutoOn(prefs.selection()).copy(selected = first))
+                prefs.setSelection(afterAutoOn(sanitizeSelection(prefs.selection(), visible)).copy(selected = first))
             }
         }
         MarketWidget().update(context, glanceId)
@@ -268,7 +303,7 @@ class ToggleAutoAction : ActionCallback {
 /** 자동모드인 위젯을 다음 종목으로 넘긴다. 홈 화면에 위젯이 하나라도 있는지 돌려준다. */
 suspend fun advanceAutoWidgets(context: Context): Boolean {
     // 자동모드가 꺼져 있으면 파일을 읽지 않는다. 이 함수는 화면이 켜져 있는 동안 1분마다 불린다.
-    val quotes by lazy { Repository.forContext(context).cached()?.quotes.orEmpty() }
+    val quotes by lazy { visibleQuotesFor(context) }
     val ids = GlanceAppWidgetManager(context).getGlanceIds(MarketWidget::class.java)
     ids.forEach { id ->
         var auto = false
@@ -341,7 +376,10 @@ private fun QuotesAndDetail(
                 Row(modifier = GlanceModifier.fillMaxWidth()) {
                     row.forEach {
                         val state = asOf?.let { time -> marketState(it, time) }
-                        QuoteTile(it, it.id == selection.selected, showSpark = large, tileWidth, state, GlanceModifier.defaultWeight())
+                        QuoteTile(
+                            it, it.id == selection.selected, showSpark = large, tileWidth, sparkMaxPixels(data.quotes.size), state,
+                            GlanceModifier.defaultWeight(),
+                        )
                     }
                     // 마지막 줄의 빈 칸도 같은 너비로 채워 세로 열을 맞춘다
                     repeat(grid.perRow - row.size) { Spacer(GlanceModifier.defaultWeight()) }
@@ -396,6 +434,16 @@ private fun Header(data: MarketData?, now: ZonedDateTime, auto: Boolean) {
         ) {
             Text("자동", style = style(if (auto) TEXT else SUBTLE, 11, bold = auto))
         }
+        // 설정 화면(지표 켜기·순서·종목 추가)을 연다. 자동 버튼과 같은 모양이다.
+        Spacer(GlanceModifier.width(6.dp))
+        Box(
+            modifier = GlanceModifier.background(TILE)
+                .cornerRadius(6.dp)
+                .padding(horizontal = 6.dp, vertical = 1.dp)
+                .clickable(actionStartActivity<MainActivity>()),
+        ) {
+            Text("설정", style = style(SUBTLE, 11))
+        }
         Box(
             modifier = GlanceModifier.padding(start = 8.dp, end = 2.dp)
                 .clickable(actionRunCallback<RefreshAction>()),
@@ -411,7 +459,8 @@ private fun Header(data: MarketData?, now: ZonedDateTime, auto: Boolean) {
  */
 @Composable
 private fun QuoteTile(
-    quote: Quote, selected: Boolean, showSpark: Boolean, tileWidth: Dp, state: MarketState?, modifier: GlanceModifier,
+    quote: Quote, selected: Boolean, showSpark: Boolean, tileWidth: Dp, sparkPixels: Int, state: MarketState?,
+    modifier: GlanceModifier,
 ) {
     val alpha = if (quote.stale) 0.5f else 1f
     val tileColor = if (selected) TILE_SELECTED else TILE
@@ -470,13 +519,16 @@ private fun QuoteTile(
                     // 큰 오늘 차트처럼 장 시작~끝 중 받은 시각까지만 그린다. 장 시간을 믿을 수 없으면 가로 전체로 늘린다.
                     // 아직 점이 모자라면 타일 높이만 맞춘다.
                     if (quote.intraday.size >= 2) {
+                        // 타일이 많아도 작은 차트 전체가 전송 크기 제한을 넘지 않게 한 개당 픽셀을 나눠 쓴다
+                        val fullW = (tileWidth - 12.dp).toPx(density).coerceAtLeast(1)
+                        val (sparkW, sparkH) = fitBitmap(fullW, sparkHeight.toPx(density), sparkPixels)
                         val bitmap = renderLine(
                             values = quote.intraday,
                             lineColor = color.toArgb(),
                             backgroundColor = tileColor.toArgb(),
-                            widthPx = (tileWidth - 12.dp).toPx(density),
-                            heightPx = sparkHeight.toPx(density),
-                            strokePx = 1.5f * density,
+                            widthPx = sparkW,
+                            heightPx = sparkH,
+                            strokePx = 1.5f * density * sparkW / fullW,
                             detailed = false,
                             xPositions = tileXPositions(quote),
                         )
@@ -521,29 +573,58 @@ private fun ChartPanel(
     val baseline = if (today) quote.prev_close ?: values.first() else values.first()
     val (color, tint) = trendColors(changePct)
     val density = LocalContext.current.resources.displayMetrics.density
-    val drawdown = drawdownSummary(quote, period)
+    // 잠수 차트. 오늘, 낙폭 없는 지표(원/달러·달러인덱스·미 10년물·VIX), 점이 모자라면 null이다.
+    val drawdown = drawdownChart(quote, period)
     // 차트 그림 높이 = 칸 높이 - 위 두 줄(이름·최저최고) - 낙폭 줄 - 아래 두 줄(기간 표시, 기간 선택)
     val imagesHeight = maxOf(40.dp, height - (if (drawdown != null) 100.dp else 84.dp))
-    val showDrawdownChart = period == Period.MAX && quote.max_drawdowns.size >= 2 && imagesHeight >= MIN_STACKED_HEIGHT
-    val drawdownHeight = imagesHeight * 0.4f
-    val priceHeight = if (showDrawdownChart) imagesHeight - drawdownHeight else imagesHeight
-    val fullW = width.toPx(density)
-    // 두 그림을 합쳐도 전송 크기 제한을 넘지 않게 픽셀을 나눠 쓴다
+    val showUnderwater = drawdown != null && imagesHeight >= MIN_STACKED_HEIGHT
+    val underwaterHeight = if (showUnderwater) imagesHeight * UNDERWATER_SHARE else 0.dp
+    val priceHeight = imagesHeight - underwaterHeight
+    val fullW = width.toPx(density).coerceAtLeast(1)
+    val priceH = priceHeight.toPx(density)
+    val underwaterH = underwaterHeight.toPx(density)
+    // 두 그림을 합친 크기로 한 번만 줄인다. 같은 축척이라 폭(px), 글자 크기, 선 굵기가 같다.
+    val (bw, bhTotal) = fitBitmap(fullW, priceH + underwaterH, MAX_CHART_PIXELS)
+    val scale = bw.toFloat() / fullW
+    val priceBh = if (showUnderwater) (priceH * scale).toInt() else bhTotal
+    val underwaterBh = (underwaterH * scale).toInt()
+    val textPx = DETAIL_TEXT_SP * density * scale
     // 로그는 첫 값 대비 배수의 지수로 그린다. 점선 문구에는 실제 값을 그대로 쓴다.
     val logChart = if (logScale && period.supportsLog) logChartFor(values) else null
     val axisLabel: (Double) -> String = if (logChart != null) ::formatPowerOfTen else ::formatPrice
-    // 로그 값도 개수가 같아 같은 눈금을 쓴다. 낙폭 차트를 쌓으면 글자는 맨 아래 낙폭 차트에만 두고 가격 차트에는 세로 보조선만 그린다.
+    val priceValues = logChart?.values ?: values
+    val priceBaseline = if (logChart != null) 0.0 else baseline
+    // renderLine이 스스로 정하는 축과 같다(값 + 기준값). 숫자 칸 폭을 미리 재려고 먼저 구한다.
+    val priceAxis = logChart?.axis ?: yAxisFor(priceValues + priceBaseline)
+    val underwaterAxis = if (showUnderwater) drawdown?.let { yAxisFor(it.depths + 0.0) } else null
+    // 두 축의 숫자 칸 중 넓은 것 하나를 위아래가 함께 써서 그림 영역 폭이 같다. 같은 인덱스가 같은 가로 위치다.
+    val gutter = if (underwaterAxis != null && priceAxis != null) {
+        commonGutter(
+            listOf(axisLabelWidth(priceAxis, axisLabel, textPx), axisLabelWidth(underwaterAxis, ::formatAxisPct, textPx)),
+            textPx,
+        )
+    } else {
+        null
+    }
+    // 최대 낙폭 구간: 고점 ~ 회복(회복하지 못했으면 마지막 점)
+    val episode = drawdown?.episode
+    val shade = drawdown?.let { chart -> chart.episode?.let { it.peak..(it.recovery ?: chart.depths.lastIndex) } }
+    val dots = episode?.let { listOf(it.peak to TEXT.toArgb(), it.trough to DOWN.toArgb()) }.orEmpty()
+    // 로그 값도 개수가 같아 같은 눈금을 쓴다. 잠수 차트를 쌓으면 글자는 아래 잠수 차트에만 두고 가격 차트에는 세로 보조선만 그린다.
     val xAxis = chartXAxis(quote, period)
     val bitmap = detailBitmap(
-        logChart?.values ?: values, color, fullW, priceHeight.toPx(density),
-        if (showDrawdownChart) MAX_CHART_PIXELS * 6 / 10 else MAX_CHART_PIXELS, density,
-        if (logChart != null) 0.0 else baseline,
+        priceValues, color, bw, priceBh, scale, density,
+        priceBaseline,
         "${if (today) "전일" else "시작"} ${formatPrice(baseline)}",
-        axisLabel, null, logChart?.axis,
+        axisLabel, null, priceAxis,
         xTicks = xAxis.ticks,
         xPositions = xAxis.positions,
-        showXLabels = !showDrawdownChart,
+        showXLabels = !showUnderwater,
+        gutterPx = gutter,
+        shade = shade,
+        dots = dots,
     )
+    val episodeText = drawdown?.let { formatEpisode(chartDates(quote, period), it.episode, period) }
     // 비교 안내. 고르는 중, 오늘 기간, 날짜를 맞출 수 없을 때 최저·최고 줄 자리에 쓴다.
     val compareNotice = when {
         picking -> "비교할 지표 타일을 누르세요"
@@ -585,8 +666,10 @@ private fun ChartPanel(
         }
         if (drawdown != null) {
             Text(
-                "고점 대비 ${formatDrawdown(drawdown.current)}  ·  MDD ${formatDrawdown(drawdown.mdd)}",
+                "고점 대비 ${formatDrawdown(drawdown.current)}  ·  MDD ${formatDrawdown(drawdown.mdd)}" +
+                    episodeText?.let { "  ·  $it" }.orEmpty(),
                 style = style(TEXT, 11, bold = true),
+                maxLines = 1,
             )
         }
         Spacer(GlanceModifier.height(4.dp))
@@ -596,19 +679,24 @@ private fun ChartPanel(
             contentScale = ContentScale.FillBounds,
             modifier = GlanceModifier.fillMaxWidth().defaultWeight().clickable(close),
         )
-        if (showDrawdownChart) {
-            // 가격과 낙폭은 눈금이 달라 한 차트에 겹치지 않고 위아래로 놓는다. 시간축은 같다.
-            val drawdownBitmap = detailBitmap(
-                quote.max_drawdowns, DOWN, fullW, drawdownHeight.toPx(density), MAX_CHART_PIXELS * 4 / 10, density,
-                null, "", ::formatAxisPct, 0.0,
-                marks = quote.max_events.map { it.index to "${it.label} ${formatDrawdown(it.depth)}" },
+        if (showUnderwater && drawdown != null) {
+            // 가격과 낙폭은 눈금이 달라 위아래로 놓는다. 점이 1:1이고 폭·숫자 칸이 같아 시점이 맞는다.
+            // 0% 위 점선에서 아래로 내려가는 잠수 차트이고, 면적을 고르게 칠한다.
+            val underwaterBitmap = detailBitmap(
+                drawdown.depths, DOWN, bw, underwaterBh, scale, density,
+                0.0, "", ::formatAxisPct, 0.0, underwaterAxis,
+                marks = drawdown.marks,
                 xTicks = xAxis.ticks,
+                xPositions = xAxis.positions,
+                gutterPx = gutter,
+                areaGradient = false,
+                shade = shade,
             )
             Image(
-                provider = ImageProvider(drawdownBitmap),
+                provider = ImageProvider(underwaterBitmap),
                 contentDescription = "${quote.name} 고점 대비 낙폭 차트",
                 contentScale = ContentScale.FillBounds,
-                modifier = GlanceModifier.fillMaxWidth().height(drawdownHeight).clickable(close),
+                modifier = GlanceModifier.fillMaxWidth().height(underwaterHeight).clickable(close),
             )
         }
         Row(modifier = GlanceModifier.fillMaxWidth().padding(top = 2.dp)) {
@@ -636,8 +724,10 @@ private fun ComparePanel(
     // 로그는 두 선 모두 시작 대비 배수의 지수다. 0 이하 값이 있으면 일반 눈금으로 그린다.
     val log = if (logScale && period.supportsLog) compareLogChart(series.primary, series.other) else null
     val axisLabel: (Double) -> String = if (log != null) ::formatPowerOfTen else ::formatIndex
+    val fullW = width.toPx(density).coerceAtLeast(1)
+    val (bw, bh) = fitBitmap(fullW, imageHeight.toPx(density), MAX_CHART_PIXELS)
     val bitmap = detailBitmap(
-        log?.primary ?: series.primary, TEXT, width.toPx(density), imageHeight.toPx(density), MAX_CHART_PIXELS, density,
+        log?.primary ?: series.primary, TEXT, bw, bh, bw.toFloat() / fullW, density,
         if (log != null) 0.0 else COMPARE_BASE, "시작 100",
         axisLabel, null, log?.axis,
         xTicks = dateTicks(series.dates, series.primary.size, period),
@@ -676,9 +766,15 @@ private fun ComparePanel(
     }
 }
 
-/** 큰 차트 비트맵. 전송 크기 제한 때문에 픽셀 수를 줄이고 위젯이 늘려서 그리게 하므로 선과 글자도 같은 비율로 줄인다. */
+/** 큰 차트 글자 크기(sp). 숫자 칸 폭을 미리 잴 때도 같은 값을 쓴다. */
+private const val DETAIL_TEXT_SP = 11f
+
+/**
+ * 큰 차트 비트맵. 전송 크기 제한 때문에 픽셀 수를 줄이고(bw×bh, 줄인 비율 scale) 위젯이 늘려서 그리게 하므로
+ * 선과 글자도 같은 비율로 줄인다. 위아래로 쌓는 두 차트는 같은 scale을 넘긴다.
+ */
 private fun detailBitmap(
-    values: List<Double>, color: Color, fullW: Int, fullH: Int, maxPixels: Int, density: Float,
+    values: List<Double>, color: Color, bw: Int, bh: Int, scale: Float, density: Float,
     baseline: Double?, baselineLabel: String, axisLabel: (Double) -> String, areaBase: Double?, fixedAxis: YAxis? = null,
     marks: List<Pair<Int, String>> = emptyList(),
     xTicks: List<XTick> = emptyList(),
@@ -686,9 +782,11 @@ private fun detailBitmap(
     showXLabels: Boolean = true,
     secondValues: List<Double>? = null,
     secondColor: Color = TEXT,
+    gutterPx: Float? = null,
+    areaGradient: Boolean = true,
+    shade: IntRange? = null,
+    dots: List<Pair<Int, Int>> = emptyList(),
 ): Bitmap {
-    val (bw, bh) = fitBitmap(fullW, fullH, maxPixels)
-    val scale = bw.toFloat() / fullW
     return renderLine(
         values = values,
         lineColor = color.toArgb(),
@@ -697,7 +795,7 @@ private fun detailBitmap(
         heightPx = bh,
         strokePx = 2.5f * density * scale,
         detailed = true,
-        textPx = 11f * density * scale,
+        textPx = DETAIL_TEXT_SP * density * scale,
         textColor = SUBTLE.toArgb(),
         baseline = baseline,
         baselineLabel = baselineLabel,
@@ -710,6 +808,11 @@ private fun detailBitmap(
         showXLabels = showXLabels,
         secondValues = secondValues,
         secondColor = secondColor.toArgb(),
+        gutterPx = gutterPx,
+        areaGradient = areaGradient,
+        shade = shade,
+        shadeColor = EPISODE_SHADE.toArgb(),
+        dots = dots,
     )
 }
 

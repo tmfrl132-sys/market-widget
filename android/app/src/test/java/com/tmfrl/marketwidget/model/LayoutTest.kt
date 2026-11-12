@@ -34,6 +34,29 @@ class LayoutTest {
         assertEquals(TileGrid(4, 3), tileGrid(400f, 10))
     }
 
+    @Test fun tileGrid_v10FixedExpectations() {
+        assertEquals(TileGrid(4, 1), tileGrid(1300f, 1))
+        assertEquals(TileGrid(4, 1), tileGrid(1300f, 3))
+        assertEquals(TileGrid(5, 1), tileGrid(1300f, 5))
+        assertEquals(TileGrid(4, 2), tileGrid(1300f, 8))
+        assertEquals(TileGrid(5, 3), tileGrid(1300f, 15))
+        assertEquals(TileGrid(7, 3), tileGrid(1300f, 21))
+        assertEquals(TileGrid(5, 5), tileGrid(500f, 21))
+        assertEquals(TileGrid(4, 6), tileGrid(400f, 21))
+        assertEquals(TileGrid(4, 1), tileGrid(400f, 2))
+    }
+
+    @Test fun sparkPixels_shareBudgetAcrossTiles() {
+        assertEquals(258 to 29, fitBitmap(316, 36, sparkMaxPixels(21)))
+        assertEquals(316 to 36, fitBitmap(316, 36, sparkMaxPixels(13)))
+        assertEquals(160_000, sparkMaxPixels(0))
+    }
+
+    @Test fun commonGutter_widestPlusMargin() {
+        assertEquals(48f, commonGutter(listOf(30f, 42f), 10f), 0.001f)
+        assertEquals(6f, commonGutter(emptyList(), 10f), 0.001f)
+    }
+
     @Test fun tileGrid_noQuotesHasNoRows() {
         assertEquals(0, tileGrid(712f, 0).rows)
     }

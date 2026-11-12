@@ -431,6 +431,54 @@ class LiveQuoteTest {
         )
     }
 
+    /** 설계서 6.5절 고정 기대값의 시작 상태. */
+    private val episodeBase = Quote(
+        "KS11", "코스피", 90.0, 0.0, 0.0,
+        max_dates = listOf("2020-01-02", "2020-03-02", "2026-11-11"), max_closes = listOf(100.0, 70.0, 90.0),
+        max_depths = listOf(0.0, -30.0, -10.0), peak = 100.0, mdd = -30.0,
+        mdd_peak_date = "2020-01-02", mdd_trough_date = "2020-03-02", mdd_recovery_date = null,
+    )
+
+    private fun episodeAfter(price: Double) = applyLiveQuotes(
+        MarketData("old", listOf(episodeBase), emptyList()),
+        mapOf("KS11" to LiveQuote(price, 0.0, 0.0, 90.0)),
+        "2026-11-12T10:00:00+09:00",
+    ).quotes[0]
+
+    @Test fun apply_newHighRecoversEpisode() {
+        val quote = episodeAfter(101.0)
+        assertEquals(listOf(0.0, -30.0, 0.0), quote.max_depths)
+        assertEquals(101.0, quote.peak!!, 0.0)
+        assertEquals(-30.0, quote.mdd!!, 0.0)
+        assertEquals("2020-01-02", quote.mdd_peak_date)
+        assertEquals("2020-03-02", quote.mdd_trough_date)
+        assertEquals("2026-11-12", quote.mdd_recovery_date)
+    }
+
+    @Test fun apply_newLowMovesTrough() {
+        val quote = episodeAfter(65.0)
+        assertEquals(listOf(0.0, -30.0, -35.0), quote.max_depths)
+        assertEquals(-35.0, quote.mdd!!, 0.0)
+        assertEquals("2020-01-02", quote.mdd_peak_date)
+        assertEquals("2026-11-12", quote.mdd_trough_date)
+        assertNull(quote.mdd_recovery_date)
+    }
+
+    @Test fun apply_ordinaryPriceOnlyChangesLastDepth() {
+        val quote = episodeAfter(95.0)
+        assertEquals(listOf(0.0, -30.0, -5.0), quote.max_depths)
+        assertEquals(100.0, quote.peak!!, 0.0)
+        assertEquals(-30.0, quote.mdd!!, 0.0)
+        assertEquals("2020-03-02", quote.mdd_trough_date)
+        assertNull(quote.mdd_recovery_date)
+    }
+
+    @Test fun apply_withoutDrawdownKeepsEmptyDepths() {
+        val quote = merged(withMax(peak = null, mdd = null), LiveQuote(90.0, -10.0, -10.0, 100.0))
+        assertEquals(emptyList<Double>(), quote.max_depths)
+        assertNull(quote.mdd_trough_date)
+    }
+
     @Test fun apply_keepsCollectorOnlyFields() {
         val base = Quote(
             "KS11", "코스피", 100.0, 1.0, 1.0, daily = listOf(99.0, 100.0),

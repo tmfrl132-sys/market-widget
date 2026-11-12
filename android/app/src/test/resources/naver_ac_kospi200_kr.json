@@ -1,0 +1,1 @@
+{"query": "코스피 200", "items": [{"code": "KPI200", "name": "코스피 200", "typeCode": "INDEX", "nationCode": null, "category": "index"}, {"code": "FUT", "name": "코스피 200 선물", "typeCode": "FUTURES", "nationCode": null, "category": "index"}]}

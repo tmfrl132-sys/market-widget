@@ -6,9 +6,12 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
-/** 낙폭 차트의 사건 표시. index는 max_drawdowns 안의 위치, depth는 그 지점의 낙폭 %. */
+/**
+ * 낙폭 차트의 사건 표시. index는 max_drawdowns 안의 위치(v0.9.0 이하 앱용), depth는 그 지점의 낙폭 %.
+ * date는 사건 구간 최저점 날짜(max_dates 안에 있다). v1.0부터 이 날짜로 위치를 찾고, 없는 옛 데이터의 사건은 그리지 않는다.
+ */
 @Serializable
-data class MaxEvent(val label: String, val index: Int, val depth: Double)
+data class MaxEvent(val label: String, val index: Int, val depth: Double, val date: String? = null)
 
 /** data.json 형식. 필드 이름은 수집기(collector/build.py)와 같다. */
 @Serializable
@@ -39,6 +42,10 @@ data class Quote(
     val big_move_pct: Double? = null, // 큰 움직임 강조 기준 %. 수집기가 보낸다. null이면 강조하지 않는다
     val market_tz: String? = null, // 시장 시간대(IANA 이름). 수집기가 보낸다. null이면 장 상태를 보이지 않는다
     val always_open: Boolean = false, // 늘 거래하는 지표(비트코인). 수집기가 보낸다
+    val max_depths: List<Double> = emptyList(), // max_closes와 1:1인 고점 대비 낙폭 %(전체 일봉 기준). 낙폭 없는 지표는 빈 목록
+    val mdd_peak_date: String? = null, // MDD 직전 고점 날짜 YYYY-MM-DD
+    val mdd_trough_date: String? = null, // MDD 바닥 날짜
+    val mdd_recovery_date: String? = null, // 바닥 뒤 처음 고점 이상이 된 날짜. 미회복이면 null
 
     val stale: Boolean = false,
 )

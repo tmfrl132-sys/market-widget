@@ -13,6 +13,7 @@ import java.time.Instant
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneOffset
+import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import kotlin.math.round
 
@@ -217,6 +218,66 @@ fun parseNaverMinutes(text: String): IntradaySeries {
 
 private const val NAVER_MINUTE_STEP = 5
 
+/** 한국 개별 종목에 네이버를 쓰는 시간(서울 평일 09:00~16:00). 그 밖에는 Yahoo가 KRX 종가를 갖고 있다. */
+private val NAVER_STOCK_FROM = LocalTime.of(9, 0)
+private val NAVER_STOCK_UNTIL = LocalTime.of(16, 0)
+
+/** KRX 정규장 마지막 봉(15:30:59까지). 그 뒤 봉은 넥스트레이드(NXT) 시간외 값이라 쓰지 않는다. */
+private val KRX_LAST_BAR = LocalTime.of(15, 30, 59)
+
+/** 지금 한국 개별 종목 시세를 네이버에서 받을 시간인지. */
+fun naverStockWindow(now: ZonedDateTime): Boolean {
+    val seoul = now.withZoneSameInstant(SEOUL)
+    val time = seoul.toLocalTime()
+    return seoul.dayOfWeek !in WEEKEND && time >= NAVER_STOCK_FROM && time < NAVER_STOCK_UNTIL
+}
+
+@Serializable
+private data class NaverStock(
+    val closePrice: String? = null,
+    val compareToPreviousClosePrice: String? = null,
+)
+
+/**
+ * 네이버 한국 개별 종목 시세. 값은 KRX 정규장(09:00~15:30) 1분봉 끝 값이고, 전일 종가는 basic의 closePrice - 전일 대비다.
+ * 서울 평일 09:00~16:00이 아니거나, 오늘 정규장 봉이 없거나, 값을 읽을 수 없으면 null(Yahoo로 받는다).
+ * 오늘 봉은 정규장 봉을 5개마다 1개로 줄이고(마지막 봉은 지킴) 장 시간은 그 날짜 09:00~15:30이다.
+ */
+fun naverStockQuote(basicText: String, minuteText: String, now: ZonedDateTime): LiveQuote? {
+    if (!naverStockWindow(now)) return null
+    val today = now.withZoneSameInstant(SEOUL).toLocalDate()
+    val minutes = json.decodeFromString<List<NaverMinute>>(minuteText).filter { it.currentPrice != null }
+    val lastDay = minutes.lastOrNull()?.localDateTime?.take(8) ?: return null
+    val regular = minutes.filter { it.localDateTime.startsWith(lastDay) }.mapNotNull { bar ->
+        val time = try {
+            LocalDateTime.parse(bar.localDateTime, NAVER_TIME_FORMAT)
+        } catch (e: DateTimeException) {
+            return@mapNotNull null
+        }
+        if (time.toLocalTime() < NAVER_OPEN || time.toLocalTime() > KRX_LAST_BAR) null else time to bar.currentPrice!!
+    }
+    if (regular.isEmpty() || regular.last().first.toLocalDate() != today) return null
+    val basic = json.decodeFromString<NaverStock>(basicText)
+    val close = naverNumber(basic.closePrice) ?: return null
+    val compare = naverNumber(basic.compareToPreviousClosePrice) ?: return null
+    val prevClose = round2(close - compare)
+    if (prevClose == 0.0) return null
+    val price = regular.last().second
+    val change = round2(price - prevClose)
+    val kept = regular.filterIndexed { i, _ -> i % NAVER_MINUTE_STEP == 0 || i == regular.lastIndex }
+    val epochAt = { time: LocalTime -> today.atTime(time).atZone(SEOUL).toEpochSecond() }
+    return LiveQuote(
+        price = price,
+        change = change,
+        changePct = round2(change / prevClose * 100),
+        prevClose = prevClose,
+        intraday = kept.map { round2(it.second) },
+        intradayTimes = kept.map { it.first.atZone(SEOUL).toEpochSecond() },
+        sessionStart = epochAt(NAVER_OPEN),
+        sessionEnd = epochAt(NAVER_CLOSE),
+    )
+}
+
 /** 일봉 끝을 현재값으로 맞춘다. 마지막 봉이 전일 종가면 오늘 봉이 아직 없는 것이라 덧붙이고, 아니면 바꾼다. */
 private fun withLatestDaily(closes: List<Double>, live: LiveQuote): List<Double> = when {
     closes.isEmpty() -> closes
@@ -227,6 +288,24 @@ private fun withLatestDaily(closes: List<Double>, live: LiveQuote): List<Double>
 /** 일봉이 1개 늘었으면 날짜도 갱신 날짜로 1개 늘린다. 이미 길이가 어긋난 목록은 건드리지 않는다. */
 private fun withLatestDate(dates: List<String>, oldSize: Int, newSize: Int, updatedAt: String): List<String> =
     if (newSize == oldSize + 1 && dates.size == oldSize) dates + updatedAt.take(10) else dates
+
+/**
+ * 시세로 바뀐 MDD 바닥·회복 날짜(바닥, 회복). 새 MDD면 바닥이 갱신 날짜가 되고 회복은 지운다.
+ * 아직 회복하지 못한 구간에서 옛 고점 이상이 되면 회복이 갱신 날짜가 된다. 고점 날짜는 바꾸지 않는다.
+ */
+private fun latestEpisode(quote: Quote, price: Double, depth: Double?, updatedAt: String): Pair<String?, String?> {
+    val trough = quote.mdd_trough_date
+    val recovery = quote.mdd_recovery_date
+    val oldMdd = quote.mdd
+    val oldPeak = quote.peak
+    val today = updatedAt.take(10)
+    return when {
+        depth == null || oldMdd == null || oldPeak == null -> trough to recovery
+        round1(depth) < oldMdd -> today to null
+        trough != null && recovery == null && price >= oldPeak -> trough to today
+        else -> trough to recovery
+    }
+}
 
 /** 직접 받은 시세를 덮어쓰고 차트 끝과 낙폭도 맞춘다. 받지 못한 항목은 그대로 두고, 하나도 못 받았으면 갱신 시각도 그대로 둔다. */
 fun applyLiveQuotes(data: MarketData, live: Map<String, LiveQuote>, updatedAt: String): MarketData {
@@ -241,6 +320,7 @@ fun applyLiveQuotes(data: MarketData, live: Map<String, LiveQuote>, updatedAt: S
                 val daily = withLatestDaily(quote.daily, it)
                 // 오늘 봉을 못 받았으면 값, 시각, 장 시간을 모두 이전 것으로 유지한다
                 val keepIntraday = it.intraday.isEmpty()
+                val episode = latestEpisode(quote, it.price, depth, updatedAt)
                 quote.copy(
                     price = it.price,
                     change = it.change,
@@ -254,6 +334,9 @@ fun applyLiveQuotes(data: MarketData, live: Map<String, LiveQuote>, updatedAt: S
                     max_drawdowns = if (depth == null) quote.max_drawdowns else replaceLast(quote.max_drawdowns, round1(depth)),
                     peak = peak,
                     mdd = if (depth == null) quote.mdd else quote.mdd?.let { old -> minOf(old, round1(depth)) },
+                    max_depths = if (depth == null) quote.max_depths else replaceLast(quote.max_depths, round1(depth)),
+                    mdd_trough_date = episode.first,
+                    mdd_recovery_date = episode.second,
                     intraday = if (keepIntraday) quote.intraday else replaceLast(it.intraday, latest),
                     intraday_times = if (keepIntraday) quote.intraday_times else it.intradayTimes,
                     session_start = if (keepIntraday) quote.session_start else it.sessionStart,

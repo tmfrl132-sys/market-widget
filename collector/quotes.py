@@ -123,8 +123,39 @@ def thin_closes(closes: list[float]) -> list[float]:
     return [closes[i] for i in thin_indices(closes)]
 
 
-def event_marks(id_: str, dates: list, depths: list[float], size: int) -> list[dict]:
-    """낙폭 차트에 표시할 사건. index는 max_drawdowns 안의 위치다."""
+def drawdown_episode(closes: list[float]) -> tuple[int, int, int | None, float] | None:
+    """최대 낙폭 구간 (고점 위치, 바닥 위치, 회복 위치, 깊이). 낙폭이 없으면 None.
+    같은 값의 고점은 나중 위치로 갱신하고, 같은 깊이의 바닥은 처음 위치를 지킨다. 회복은 바닥 뒤 처음 고점 종가 이상이 된 위치다."""
+    if not closes:
+        return None
+    peak, peak_i = closes[0], 0
+    best, trough, best_peak = 0.0, None, None
+    for i, close in enumerate(closes):
+        if close >= peak:
+            peak, peak_i = close, i
+        depth = max(-100.0, (close / peak - 1) * 100) if peak > 0 else 0.0
+        if depth < best:
+            best, trough, best_peak = depth, i, peak_i
+    if trough is None:
+        return None
+    recovery = next((k for k in range(trough + 1, len(closes)) if closes[k] >= closes[best_peak]), None)
+    return best_peak, trough, recovery, round(best, 1)
+
+
+def max_picks(closes: list[float], extras: list[int]) -> list[int]:
+    """thin_indices에 extras 중 빠진 위치를 정렬 위치에 더한다. thin_indices가 만든 중복은 그대로 둔다."""
+    picks = thin_indices(closes)
+    present = set(picks)
+    for extra in sorted(set(extras)):
+        if extra not in present:
+            picks.append(extra)
+            present.add(extra)
+    picks.sort()
+    return picks
+
+
+def _event_deepest(id_: str, dates: list, depths: list[float], size: int) -> list[tuple[dict, int]]:
+    """사건 표시와 그 사건 최저점의 전체 일봉 위치. index는 max_drawdowns 안의 위치다."""
     marks = []
     for label, start, end, symbols in MARKET_EVENTS:
         if id_ not in symbols:
@@ -134,12 +165,19 @@ def event_marks(id_: str, dates: list, depths: list[float], size: int) -> list[d
             continue
         deepest = min(window, key=lambda i: depths[i])
         if depths[deepest] <= EVENT_MIN_DEPTH:
-            marks.append({"label": label, "index": deepest // size, "depth": round(depths[deepest], 1)})
+            marks.append(({"label": label, "index": deepest // size, "depth": round(depths[deepest], 1),
+                           "date": dates[deepest].isoformat()}, deepest))
     return marks
 
 
+def event_marks(id_: str, dates: list, depths: list[float], size: int) -> list[dict]:
+    """낙폭 차트에 표시할 사건. index는 max_drawdowns 안의 위치, date는 최저점 날짜다."""
+    return [mark for mark, _ in _event_deepest(id_, dates, depths, size)]
+
+
 def max_fields(payload: dict, with_drawdown: bool, id_: str = "") -> dict:
-    """전체 기간 차트와 고점·MDD. 낙폭은 일봉 전체로 계산하고 차트 점만 줄인다."""
+    """전체 기간 차트와 고점·MDD. 낙폭은 일봉 전체로 계산하고 차트 점만 줄인다.
+    낙폭 지표는 MDD 고점·바닥·회복과 사건 최저점 위치를 차트 점에 반드시 넣는다."""
     result = payload["chart"]["result"][0]
     bars = [(ts, c) for ts, c in zip(result["timestamp"], result["indicators"]["quote"][0]["close"])
             if c is not None]
@@ -148,23 +186,39 @@ def max_fields(payload: dict, with_drawdown: bool, id_: str = "") -> dict:
     to_date = _bar_date_fn(result["meta"])
     size = _bucket_size(len(closes))
     chunks = range(0, len(closes), size)
-    picks = thin_indices(closes)
     fields = {
-        "max_closes": [round(closes[i], 2) for i in picks],
-        "max_dates": [to_date(bars[i][0]).isoformat() for i in picks],
+        "max_closes": [], "max_dates": [], "max_depths": [],
         "max_drawdowns": [],
         "max_events": [],
         "max_start": _local_date(bars[0][0], offset).year,
         "peak": None,
         "mdd": None,
+        "mdd_peak_date": None, "mdd_trough_date": None, "mdd_recovery_date": None,
     }
+    extras: list[int] = []
     if with_drawdown:
         depths = drawdowns(closes)
-        # 묶음의 가장 깊은 값을 써서 MDD 바닥이 차트에서 사라지지 않게 한다
+        episode = drawdown_episode(closes)
+        if episode:
+            extras += [i for i in episode[:3] if i is not None]
+        found = _event_deepest(id_, [_local_date(ts, offset) for ts, _ in bars], depths, size)
+        extras += [deepest for _, deepest in found]
+        # 묶음의 가장 깊은 값을 써서 MDD 바닥이 차트에서 사라지지 않게 한다(옛 앱용)
         fields["max_drawdowns"] = [round(min(depths[i:i + size]), 1) for i in chunks]
-        fields["max_events"] = event_marks(id_, [_local_date(ts, offset) for ts, _ in bars], depths, size)
+        # 사건 날짜는 max_dates와 같은 날짜 함수로 만들어 max_dates 안에 있게 한다
+        fields["max_events"] = [{**mark, "date": to_date(bars[deepest][0]).isoformat()} for mark, deepest in found]
         fields["peak"] = round(max(closes), 2)
         fields["mdd"] = round(min(depths), 1)
+        if episode:
+            fields["mdd_peak_date"] = to_date(bars[episode[0]][0]).isoformat()
+            fields["mdd_trough_date"] = to_date(bars[episode[1]][0]).isoformat()
+            if episode[2] is not None:
+                fields["mdd_recovery_date"] = to_date(bars[episode[2]][0]).isoformat()
+    picks = max_picks(closes, extras)
+    fields["max_closes"] = [round(closes[i], 2) for i in picks]
+    fields["max_dates"] = [to_date(bars[i][0]).isoformat() for i in picks]
+    if with_drawdown:
+        fields["max_depths"] = [round(depths[i], 1) for i in picks]
     return fields
 
 
@@ -210,14 +264,21 @@ def _fetch_max(id_: str, symbol: str, get, prev_item: dict) -> dict:
     except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as e:
         log.warning("%s 전체 기간 실패: %s", symbol, e)
         values, dates = _kept(prev_item, "max_closes", "max_dates")
+        depths = prev_item.get("max_depths", [])
+        if len(depths) != len(values):  # 점이 어긋난 낙폭은 비운다. 위젯이 max_closes로 대신 계산한다
+            depths = []
         return {
             "max_closes": values,
             "max_dates": dates,
+            "max_depths": depths,
             "max_drawdowns": prev_item.get("max_drawdowns", []),
             "max_events": prev_item.get("max_events", []),
             "max_start": prev_item.get("max_start"),
             "peak": prev_item.get("peak"),
             "mdd": prev_item.get("mdd"),
+            "mdd_peak_date": prev_item.get("mdd_peak_date"),
+            "mdd_trough_date": prev_item.get("mdd_trough_date"),
+            "mdd_recovery_date": prev_item.get("mdd_recovery_date"),
         }
 
 
@@ -250,7 +311,8 @@ def fetch_quotes(prev: dict[str, dict], get=requests.get) -> list[dict]:
             log.warning("%s 시세 실패: %s", symbol, e)
             old = prev.get(id_)
             if old:
-                items.append({"daily_dates": [], "weekly_dates": [], "max_dates": [], **old,
+                items.append({"daily_dates": [], "weekly_dates": [], "max_dates": [], "max_depths": [],
+                              "mdd_peak_date": None, "mdd_trough_date": None, "mdd_recovery_date": None, **old,
                               "big_move_pct": old.get("big_move_pct") or BIG_MOVE_BASE[id_],
                               "market_tz": MARKET_TZ[id_], "always_open": id_ in ALWAYS_OPEN,
                               "stale": True})
@@ -258,8 +320,9 @@ def fetch_quotes(prev: dict[str, dict], get=requests.get) -> list[dict]:
                 items.append({"id": id_, "name": name, "price": None, "change": None,
                               "change_pct": None, "history": [], "chart": [],
                               "daily": [], "daily_dates": [], "weekly": [], "weekly_dates": [],
-                              "max_closes": [], "max_dates": [], "max_drawdowns": [],
+                              "max_closes": [], "max_dates": [], "max_depths": [], "max_drawdowns": [],
                               "max_events": [], "max_start": None, "peak": None, "mdd": None,
+                              "mdd_peak_date": None, "mdd_trough_date": None, "mdd_recovery_date": None,
                               "big_move_pct": BIG_MOVE_BASE[id_], "market_tz": MARKET_TZ[id_],
                               "always_open": id_ in ALWAYS_OPEN, "stale": True})
     return items

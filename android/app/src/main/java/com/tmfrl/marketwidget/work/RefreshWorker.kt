@@ -12,17 +12,37 @@ import androidx.work.OutOfQuotaPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.tmfrl.marketwidget.data.CustomRepository
 import com.tmfrl.marketwidget.data.Repository
+import com.tmfrl.marketwidget.data.SettingsStore
 import com.tmfrl.marketwidget.widget.redrawAllWidgets
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 
-/** 30분마다 data.json과 현재 시세를 받아 위젯을 다시 그린다. */
+/** 30분마다 data.json과 현재 시세, 추가 종목을 받아 위젯을 다시 그린다. */
 class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
-        Repository.forContext(applicationContext).refresh()
-        redrawAllWidgets(applicationContext)
+        val context = applicationContext
+        // 기본 지표와 추가 종목을 함께 받는다. 한쪽이 실패해도 다른 쪽은 반영한다.
+        coroutineScope {
+            launch { quietly { Repository.forContext(context).refresh() } }
+            launch { quietly { CustomRepository.forContext(context).refresh(SettingsStore.forContext(context).read()) } }
+        }
+        redrawAllWidgets(context)
         return Result.success()
+    }
+
+    private suspend fun quietly(block: suspend () -> Unit) {
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // 받지 못한 쪽은 캐시가 그대로 남는다
+        }
     }
 
     companion object {

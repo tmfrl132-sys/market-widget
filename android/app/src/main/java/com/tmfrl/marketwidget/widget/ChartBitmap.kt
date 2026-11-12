@@ -29,6 +29,11 @@ import com.tmfrl.marketwidget.model.yPosition
  * showXLabels가 false면 세로 보조선만 그리고 글자 띠를 잡지 않는다.
  * secondValues는 겹쳐 그릴 두 번째 선(detailed일 때만, 두 지표 비교)이고 secondColor는 그 색이다.
  * 두 번째 선이 있으면 영역 채우기를 끄고, 세로축은 두 선과 기준값을 함께 넣어 정한다. 두 번째 선을 먼저 그려 주 선이 위에 온다.
+ * gutterPx는 오른쪽 숫자 칸 폭(없으면 숫자 길이로 정한다). 위아래 두 차트가 같은 폭을 쓰면 같은 인덱스가 같은 가로 위치에 놓인다.
+ * areaGradient가 false면 영역을 위아래 그라데이션 대신 알파 0x55로 고르게 칠한다(잠수 차트).
+ * shade는 그림 영역 전체 높이로 옅게 칠할 점 범위(최대 낙폭 구간)이고 shadeColor로 칠한다. 영역 채우기보다 먼저 그린다.
+ * dots는 따로 찍을 점(위치와 색). 반지름은 선 굵기의 2배이고 배경색 테두리를 두른다.
+ * baselineLabel이 빈 문자열이면 점선 문구와 그 배경 칸을 그리지 않는다.
  */
 fun renderLine(
     values: List<Double>,
@@ -51,6 +56,11 @@ fun renderLine(
     showXLabels: Boolean = true,
     secondValues: List<Double>? = null,
     secondColor: Int = 0,
+    gutterPx: Float? = null,
+    areaGradient: Boolean = true,
+    shade: IntRange? = null,
+    shadeColor: Int = 0,
+    dots: List<Pair<Int, Int>> = emptyList(),
 ): Bitmap {
     val w = widthPx.coerceAtLeast(2)
     val h = heightPx.coerceAtLeast(2)
@@ -66,7 +76,7 @@ fun renderLine(
         textSize = textPx
     }
     // 세로축 숫자가 들어갈 오른쪽 칸. 선이 숫자와 겹치지 않게 그림 영역과 나눈다.
-    val gutter = axis?.ticks?.maxOf { text.measureText(axisLabel(it)) }?.plus(textPx * 0.6f) ?: 0f
+    val gutter = if (axis == null) 0f else gutterPx ?: axisLabelWidth(axis, axisLabel, textPx).plus(textPx * 0.6f)
     val plotW = (w - gutter).coerceAtLeast(2f)
     // 가로축 글자가 들어갈 아래쪽 띠. 세로 계산은 띠를 뺀 높이 안에서 한다. 작은 차트는 눈금을 무시해 띠와 세로선이 없다.
     val ticks = if (detailed) xTicks else emptyList()
@@ -79,6 +89,10 @@ fun renderLine(
     val points = chartPoints(values, plotW, plotH, pad, axis, xPositions)
     if (points.isEmpty()) return bitmap
 
+    // 구간 칠은 눈금선·영역·선 아래에 깔리게 가장 먼저 그린다
+    if (detailed && shade != null && shade.first in points.indices && shade.last in points.indices) {
+        canvas.drawRect(points[shade.first].first, 0f, points[shade.last].first, plotH, Paint().apply { color = shadeColor })
+    }
     if (axis != null) drawAxis(canvas, axis, axisLabel, text, plotW, w.toFloat(), plotH, pad, strokePx)
 
     // 세로 보조선은 차트 아래에 깔리게 먼저 그리고, 글자 띠로 내려가지 않게 plotH까지만 그린다
@@ -105,16 +119,21 @@ fun renderLine(
         val bottom = lineColor and 0x00FFFFFF
         canvas.drawPath(area, Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
-            shader = LinearGradient(0f, 0f, 0f, plotH, top, bottom, Shader.TileMode.CLAMP)
+            if (areaGradient) {
+                shader = LinearGradient(0f, 0f, 0f, plotH, top, bottom, Shader.TileMode.CLAMP)
+            } else {
+                color = (0x55 shl 24) or (lineColor and 0x00FFFFFF)
+            }
         })
     }
     if (axis != null && baseline != null) drawBaseline(canvas, baseline, axis, text, plotW, plotH, pad, strokePx)
     if (secondPoints.isNotEmpty()) canvas.drawPath(linePath(secondPoints), strokePaint(secondColor, strokePx))
     canvas.drawPath(line, strokePaint(lineColor, strokePx))
     if (detailed) {
+        dots.filter { (i, _) -> i in points.indices }.forEach { (i, color) -> drawDot(canvas, points[i], color, backgroundColor, strokePx) }
         if (secondPoints.isNotEmpty()) drawEndDot(canvas, secondPoints.last(), secondColor, backgroundColor, strokePx)
         drawEndDot(canvas, points.last(), lineColor, backgroundColor, strokePx)
-        if (axis != null && baseline != null) {
+        if (axis != null && baseline != null && baselineLabel.isNotEmpty()) {
             drawBaselineLabel(canvas, baselineLabel, baseline, values.last(), axis, text, backgroundColor, plotW, plotH, pad)
         }
         drawMarks(canvas, marks.filter { (i, _) -> i in points.indices }, points, text, backgroundColor, plotW, strokePx)
@@ -144,6 +163,19 @@ private fun drawEndDot(canvas: Canvas, point: Pair<Float, Float>, lineColor: Int
     val (x, y) = point
     canvas.drawCircle(x, y, strokePx * 2.2f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = lineColor })
     canvas.drawCircle(x, y, strokePx * 1.1f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = backgroundColor })
+}
+
+/** 고점·바닥 점. 배경색 테두리 안에 색 원을 그린다. */
+private fun drawDot(canvas: Canvas, point: Pair<Float, Float>, color: Int, backgroundColor: Int, strokePx: Float) {
+    val (x, y) = point
+    canvas.drawCircle(x, y, strokePx * 2.8f, Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = backgroundColor })
+    canvas.drawCircle(x, y, strokePx * 2f, Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color })
+}
+
+/** 세로축 숫자 중 가장 넓은 글자 폭(px). renderLine과 같은 글자 크기로 잰다. 위아래 두 차트의 숫자 칸 폭을 맞출 때 쓴다. */
+fun axisLabelWidth(axis: YAxis, axisLabel: (Double) -> String, textPx: Float): Float {
+    val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = textPx }
+    return axis.ticks.maxOfOrNull { text.measureText(axisLabel(it)) } ?: 0f
 }
 
 /** 가로축 글자 띠의 높이, 글자 아래 여백, 글자 사이 최소 간격. 글자 크기의 배수다. */

@@ -21,19 +21,14 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
-import java.net.HttpURLConnection
-import java.net.URL
 import java.net.URLEncoder
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import java.time.OffsetDateTime
 
 const val DATA_URL = "https://tmfrl132-sys.github.io/market-widget/data.json"
-private const val YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/%s?range=5d&interval=1d"
-private const val INTRADAY_URL = "https://query1.finance.yahoo.com/v8/finance/chart/%s?range=1d&interval=5m"
+internal const val YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/%s?range=5d&interval=1d"
+internal const val INTRADAY_URL = "https://query1.finance.yahoo.com/v8/finance/chart/%s?range=1d&interval=5m"
 private const val NAVER_INDEX_URL = "https://m.stock.naver.com/api/index/%s/basic"
 private const val NAVER_MINUTE_URL = "https://api.stock.naver.com/chart/domestic/index/%s/minute"
-private const val TIMEOUT_MS = 10_000
 
 /**
  * data.json을 받고, 시세는 국내 지수는 네이버, 나머지는 Yahoo에서 직접 받은 값으로 덮어써 기기에 캐시한다.
@@ -55,19 +50,8 @@ class Repository(
             cached()
         }
         val data = base?.let { applyLiveQuotes(it, fetchLive(), now()) }
-        if (data != null) writeCache(encodeMarketData(data))
+        if (data != null) writeAtomic(cacheFile, encodeMarketData(data))
         data
-    }
-
-    /** 위젯이 쓰다 만 파일을 읽지 않게 임시 파일에 다 쓴 뒤 한 번에 바꿔치기한다. */
-    private fun writeCache(text: String) {
-        val temp = File.createTempFile("data", ".tmp", cacheFile.parentFile)
-        try {
-            temp.writeText(text)
-            Files.move(temp.toPath(), cacheFile.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-        } finally {
-            temp.delete()
-        }
     }
 
     /** 마지막으로 새로 받은 시각. 받은 적이 없으면 0. */
@@ -93,15 +77,6 @@ class Repository(
             }.awaitAll().filterNotNull().toMap()
         }
 
-        /** 네트워크 오류나 잘못된 응답(SerializationException 포함)이면 fallback을 돌려준다. */
-        private inline fun <T> orElse(fallback: T, block: () -> T): T = try {
-            block()
-        } catch (e: IOException) {
-            fallback
-        } catch (e: IllegalArgumentException) {
-            fallback
-        }
-
         private fun fetchNaver(code: String): LiveQuote? = orElse(null) {
             parseNaverIndex(httpGet(NAVER_INDEX_URL.format(code)))?.withIntraday(
                 // 분봉이 실패해도 시세는 살린다
@@ -115,23 +90,6 @@ class Repository(
                 // 5분봉이 실패해도 시세는 살린다
                 orElse(IntradaySeries()) { parseIntraday(httpGet(INTRADAY_URL.format(encoded))) },
             )
-        }
-
-        private fun httpGet(url: String): String {
-            val conn = URL(url).openConnection() as HttpURLConnection
-            try {
-                conn.connectTimeout = TIMEOUT_MS
-                conn.readTimeout = TIMEOUT_MS
-                conn.useCaches = false
-                // Yahoo는 브라우저 이름이 없는 요청을 막는다
-                conn.setRequestProperty("User-Agent", "Mozilla/5.0")
-                if (conn.responseCode != HttpURLConnection.HTTP_OK) {
-                    throw IOException("HTTP ${conn.responseCode}")
-                }
-                return conn.inputStream.bufferedReader().use { it.readText() }
-            } finally {
-                conn.disconnect()
-            }
         }
     }
 }
