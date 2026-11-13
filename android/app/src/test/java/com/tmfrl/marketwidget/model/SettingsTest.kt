@@ -26,7 +26,7 @@ class SettingsTest {
     @Test fun visible_orderFirstThenRestWithoutHidden() {
         val settings = WidgetSettings(order = listOf("GSPC", "KS11"), hidden = listOf("VIX"))
         assertEquals(
-            listOf("GSPC", "KS11", "KQ11", "ES", "IXIC", "NQ", "KRW", "DXY", "TNX", "CL", "GC", "BTC"),
+            listOf("GSPC", "KS11", "KQ11", "NDX", "KRW", "DXY", "TNX", "CL", "GC", "BTC"),
             ids(visibleQuotes(builtIn, emptyList(), settings)),
         )
     }
@@ -34,7 +34,8 @@ class SettingsTest {
     @Test fun visible_customNotInOrderGoesLastAsPlaceholder() {
         val settings = WidgetSettings(order = listOf("GSPC", "KS11"), hidden = listOf("VIX"), custom = listOf(aapl))
         val quotes = visibleQuotes(builtIn, emptyList(), settings)
-        assertEquals(13, quotes.size)
+        // 기본 지표에서 1개(VIX)를 끄고 추가 종목 1개를 더한다
+        assertEquals(builtInIds.size, quotes.size)
         assertEquals("T:AAPL", quotes.last().id)
         assertEquals(Quote("T:AAPL", "애플", null, null, null), quotes.last())
     }
@@ -126,6 +127,73 @@ class SettingsTest {
         assertEquals(WidgetSettings(), parseSettings("{broken"))
         assertEquals(WidgetSettings(), parseSettings(""))
         assertEquals(WidgetSettings(), parseSettings("{}"))
+    }
+
+    // ---- v1.1: 나스닥 종합 → 나스닥100, 선물 카드 삭제 ----
+
+    @Test fun builtInNames_v11ElevenWithNasdaq100() {
+        assertEquals(
+            listOf("KS11", "KQ11", "GSPC", "NDX", "VIX", "KRW", "DXY", "TNX", "CL", "GC", "BTC"),
+            builtInIds,
+        )
+        assertEquals("나스닥100", BUILT_IN_NAMES["NDX"])
+        assertFalse(listOf("IXIC", "ES", "NQ").any { it in BUILT_IN_NAMES })
+    }
+
+    @Test fun migrate_ixicTakesOverNdxSlotAndToggle_futuresRemoved() {
+        val old = WidgetSettings(
+            order = listOf("GSPC", "ES", "IXIC", "NQ", "KS11", "T:AAPL"),
+            hidden = listOf("IXIC", "NQ", "VIX"),
+            custom = listOf(aapl),
+        )
+        val migrated = migrateSettings(old)
+        assertEquals(listOf("GSPC", "NDX", "KS11", "T:AAPL"), migrated.order)
+        assertEquals(listOf("NDX", "VIX"), migrated.hidden)
+        assertEquals(listOf(aapl), migrated.custom)
+        // NDX가 옛 IXIC 자리(GSPC 다음)에 꺼진 채로 보이지 않는다
+        val visible = ids(visibleQuotes(builtIn, emptyList(), migrated))
+        assertEquals(listOf("GSPC", "KS11", "T:AAPL", "KQ11", "KRW", "DXY", "TNX", "CL", "GC", "BTC"), visible)
+    }
+
+    @Test fun migrate_shownIxicKeepsPlaceAsNdx() {
+        val migrated = migrateSettings(WidgetSettings(order = listOf("IXIC", "KS11")))
+        assertEquals(listOf("NDX", "KS11"), migrated.order)
+        assertEquals("NDX", visibleQuotes(builtIn, emptyList(), migrated).first().id)
+    }
+
+    @Test fun migrate_alreadyMigratedOrDefaultIsSameInstance() {
+        val current = WidgetSettings(order = listOf("NDX", "GSPC"), hidden = listOf("VIX"))
+        assertTrue(current === migrateSettings(current))
+        val default = WidgetSettings()
+        assertTrue(default === migrateSettings(default))
+    }
+
+    @Test fun migrate_bothOldAndNewIdKeepsFirst() {
+        assertEquals(listOf("NDX", "GSPC"), migrateSettings(WidgetSettings(order = listOf("NDX", "GSPC", "IXIC"))).order)
+    }
+
+    @Test fun builtInQuotes_dropsRetiredIdsFromOldDataJson() {
+        // 수집기보다 앱을 먼저 배포하면 data.json에 옛 13개(IXIC, ES, NQ)가 남아 있다. NDX는 수집기 배포 뒤에 생긴다.
+        val oldIds = listOf("KS11", "KQ11", "GSPC", "ES", "IXIC", "NQ", "VIX", "KRW", "DXY", "TNX", "CL", "GC", "BTC")
+        val oldData = oldIds.map { Quote(it, it, 1.0, 0.0, 0.0) }
+        val expected = listOf("KS11", "KQ11", "GSPC", "VIX", "KRW", "DXY", "TNX", "CL", "GC", "BTC")
+        assertEquals(expected, ids(builtInQuotes(oldData)))
+        assertEquals(expected, ids(visibleQuotes(oldData, emptyList(), WidgetSettings())))
+        // 옛 설정의 IXIC를 옮긴 NDX는 data.json에 아직 없으면 타일이 없다
+        assertEquals(expected, ids(visibleQuotes(oldData, emptyList(), migrateSettings(WidgetSettings(order = listOf("IXIC"))))))
+    }
+
+    @Test fun sanitize_retiredIdSelectionIsCleared() {
+        assertEquals(ChartSelection(), sanitizeSelection(ChartSelection("IXIC", null, false), builtInIds))
+        assertEquals(ChartSelection("GSPC", null, false), sanitizeSelection(ChartSelection("GSPC", "ES", false), builtInIds))
+    }
+
+    @Test fun addCustom_nasdaqCompositeIndexCanBeAdded() {
+        // 기본 지표에서 빠진 나스닥 종합은 추가 종목으로 넣을 수 있다
+        assertFalse(isAdded(WidgetSettings(), "^IXIC"))
+        val ixic = CustomTicker(customId("^IXIC"), "^IXIC", "NASDAQ Composite", KIND_INDEX)
+        assertEquals(listOf(ixic), addCustom(WidgetSettings(), ixic).custom)
+        assertTrue(isAdded(WidgetSettings(), "^NDX"))
     }
 
     @Test fun json_readsSpecExample() {

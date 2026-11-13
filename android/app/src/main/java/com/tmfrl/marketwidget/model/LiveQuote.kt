@@ -17,14 +17,15 @@ import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import kotlin.math.round
 
-/** 위젯 id와 Yahoo 심볼. 수집기 collector/config.py의 SYMBOLS와 같다. */
+/**
+ * 위젯 id와 Yahoo 심볼. 수집기 collector/config.py의 SYMBOLS와 같다.
+ * v1.1부터 나스닥 종합(IXIC) 대신 나스닥100(NDX)이고, S&P·나스닥 선물(ES, NQ)은 카드가 아니라 합친 차트 재료다(COMBINED_FUTURES).
+ */
 val LIVE_SYMBOLS: Map<String, String> = mapOf(
     "KS11" to "^KS11",
     "KQ11" to "^KQ11",
     "GSPC" to "^GSPC",
-    "ES" to "ES=F",
-    "IXIC" to "^IXIC",
-    "NQ" to "NQ=F",
+    "NDX" to "^NDX",
     "VIX" to "^VIX",
     "KRW" to "KRW=X",
     "DXY" to "DX-Y.NYB",
@@ -43,6 +44,8 @@ data class LiveQuote(
     val intradayTimes: List<Long> = emptyList(),
     val sessionStart: Long? = null,
     val sessionEnd: Long? = null,
+    // 합친 24시간 차트 재료(S&P500·나스닥100만). 갱신 때 계산에만 쓰고 캐시에 넣지 않는다.
+    val combinedSource: CombinedSource? = null,
 )
 
 /** 오늘 봉. times는 values와 1:1인 초 단위 epoch이고, 믿을 수 없으면 비어 있다. 장 시간을 모르면 시작·끝은 null이다. */
@@ -80,13 +83,15 @@ private data class ChartMeta(
     val gmtoffset: Long = 0,
     // 응답마다 형식이 다를 수 있어 시세 해석이 실패하지 않게 직접 읽는다
     val tradingPeriods: JsonElement? = null,
+    val previousClose: Double? = null,
+    val shortName: String? = null,
 )
 
 @Serializable
 private data class ChartIndicators(val quote: List<ChartBars>)
 
 @Serializable
-private data class ChartBars(val close: List<Double?> = emptyList())
+private data class ChartBars(val close: List<Double?> = emptyList(), val open: List<Double?> = emptyList())
 
 private val json = Json { ignoreUnknownKeys = true }
 
@@ -102,20 +107,29 @@ private fun round1(value: Double) = round(value * 10) / 10
 private fun replaceLast(values: List<Double>, latest: Double) =
     if (values.isEmpty()) values else values.dropLast(1) + latest
 
-/** tradingPeriods의 `[[{start, end}]]`에서 첫 start와 마지막 end를 읽는다. 다른 형태이거나 없으면 null. */
-private fun tradingSession(periods: JsonElement?): Pair<Long, Long>? {
+/**
+ * tradingPeriods의 `[[{start, end}]]`를 날짜(안쪽 목록)마다 (첫 start, 마지막 end)로 읽는다.
+ * 다른 형태이거나 없으면 null. range=1d는 1개, range=5d는 날짜 수만큼이다.
+ */
+private fun tradingDays(periods: JsonElement?): List<TradingSpan>? {
     val outer = periods as? JsonArray ?: return null
-    val spans = outer.flatMap { inner ->
+    val days = outer.mapNotNull { inner ->
         val list = inner as? JsonArray ?: return null
-        list.map { span ->
+        val spans = list.map { span ->
             val fields = span as? JsonObject ?: return null
             val start = (fields["start"] as? JsonPrimitive)?.longOrNull ?: return null
             val end = (fields["end"] as? JsonPrimitive)?.longOrNull ?: return null
             start to end
         }
+        if (spans.isEmpty()) null else TradingSpan(spans.first().first, spans.last().second)
     }
-    if (spans.isEmpty()) return null
-    return spans.first().first to spans.last().second
+    return days.ifEmpty { null }
+}
+
+/** tradingPeriods의 첫 start와 마지막 end. 다른 형태이거나 없으면 null. */
+private fun tradingSession(periods: JsonElement?): Pair<Long, Long>? {
+    val days = tradingDays(periods) ?: return null
+    return days.first().start to days.last().end
 }
 
 /** Yahoo 5분봉 응답에서 비어 있지 않은 종가와 그 봉 시각, 장 시간을 뽑는다. */
@@ -130,6 +144,59 @@ fun parseIntraday(text: String): IntradaySeries {
     }
     val session = tradingSession(result.meta.tradingPeriods)
     return IntradaySeries(closes.filterNotNull().map(::round2), times, session?.first, session?.second)
+}
+
+/** 비어 있지 않은 종가와 그 봉 시각. 시각과 종가 수가 다르면 어느 봉인지 알 수 없어 null. */
+private fun closeRows(result: ChartResult): List<Pair<Long, Double>>? {
+    val closes = result.indicators.quote.firstOrNull()?.close ?: return null
+    if (result.timestamp.size != closes.size) return null
+    return result.timestamp.zip(closes).mapNotNull { (time, close) -> close?.let { time to it } }
+}
+
+/**
+ * 현물 range=5d 5분봉 응답에서 마지막 정규장만 뽑는다. range=1d 응답의 parseIntraday와 같은 결과다(카드 작은 차트, 기존 오늘 차트).
+ * 마지막 정규장은 봉이 있는 tradingPeriods의 마지막 날이다. tradingPeriods가 없으면 마지막 봉과 같은 시장 날짜의 봉이고 장 시간은 null이다.
+ * 시각과 종가 수가 다르면 빈 값(이전 오늘 차트를 유지한다).
+ */
+fun parseLastSession(text: String): IntradaySeries {
+    val result = json.decodeFromString<ChartResponse>(text).chart.result?.firstOrNull() ?: return IntradaySeries()
+    val rows = closeRows(result) ?: return IntradaySeries()
+    val lastBar = rows.lastOrNull() ?: return IntradaySeries()
+    val day = tradingDays(result.meta.tradingPeriods)?.lastOrNull { span -> rows.any { it.first in span.start..span.end } }
+    val kept = if (day != null) {
+        rows.filter { it.first in day.start..day.end }
+    } else {
+        val lastDate = localDate(lastBar.first, result.meta.gmtoffset)
+        rows.filter { localDate(it.first, result.meta.gmtoffset) == lastDate }
+    }
+    return IntradaySeries(kept.map { round2(it.second) }, kept.map { it.first }, day?.start, day?.end)
+}
+
+/** 현물 range=5d 5분봉 응답을 합친 차트 재료로 읽는다. 봉이 없거나 시각과 종가 수가 다르면 null. */
+fun parseSpotSeries(text: String): SpotSeries? {
+    val result = json.decodeFromString<ChartResponse>(text).chart.result?.firstOrNull() ?: return null
+    val rows = closeRows(result)?.takeIf { it.isNotEmpty() } ?: return null
+    return SpotSeries(
+        bars = rows.map { SpotBar(it.first, it.second) },
+        sessions = tradingDays(result.meta.tradingPeriods).orEmpty(),
+        previousClose = result.meta.previousClose,
+    )
+}
+
+/**
+ * 선물 range=5d 5분봉 응답을 읽는다. 선물 tradingPeriods는 뉴욕 날짜 00:00~23:59라 실제 거래 시간이 아니어서 쓰지 않는다.
+ * 시가 목록 길이가 다르면 시가는 모두 null이다. 봉이 없거나 시각과 종가 수가 다르면 null.
+ */
+fun parseFuturesSeries(text: String): FuturesSeries? {
+    val result = json.decodeFromString<ChartResponse>(text).chart.result?.firstOrNull() ?: return null
+    val bars = result.indicators.quote.firstOrNull() ?: return null
+    if (result.timestamp.size != bars.close.size) return null
+    val opens = bars.open.takeIf { it.size == bars.close.size }
+    val rows = result.timestamp.indices.mapNotNull { i ->
+        bars.close[i]?.let { FuturesBar(result.timestamp[i], opens?.get(i), it) }
+    }
+    if (rows.isEmpty()) return null
+    return FuturesSeries(rows, result.meta.shortName?.takeIf { it.isNotBlank() })
 }
 
 /** Yahoo 차트 응답에서 현재값과 전일 대비를 구한다. 계산은 수집기 parse_chart와 같다. 값이 모자라면 null. */
@@ -307,9 +374,26 @@ private fun latestEpisode(quote: Quote, price: Double, depth: Double?, updatedAt
     }
 }
 
-/** 직접 받은 시세를 덮어쓰고 차트 끝과 낙폭도 맞춘다. 받지 못한 항목은 그대로 두고, 하나도 못 받았으면 갱신 시각도 그대로 둔다. */
-fun applyLiveQuotes(data: MarketData, live: Map<String, LiveQuote>, updatedAt: String): MarketData {
+/**
+ * 합친 24시간 차트(S&P500·나스닥100). 이번 갱신에 재료(현물·선물 5일 5분봉)를 받았으면 새로 계산하고, 못 받았으면 null이다.
+ * 낡은 합친 차트를 남기지 않기 위해서다(그러면 기존 오늘 차트를 그린다). 다른 지표는 그대로 둔다.
+ * 계약 교체 보정에 쓰는 지난 결과는 직전 캐시(previous)에서, 없으면 덮어쓸 데이터에서 찾는다.
+ */
+private fun combinedAfter(quote: Quote, live: LiveQuote, now: Long?, previous: MarketData?): CombinedChart? {
+    if (quote.id !in COMBINED_FUTURES) return quote.combined
+    val source = live.combinedSource ?: return null
+    if (now == null) return null
+    val before = previous?.quotes?.firstOrNull { it.id == quote.id }?.combined ?: quote.combined
+    return combine24h(source.spot, source.futures, now, rollAtFor(before, source.futures.contract, now))
+}
+
+/**
+ * 직접 받은 시세를 덮어쓰고 차트 끝과 낙폭도 맞춘다. 받지 못한 항목은 그대로 두고, 하나도 못 받았으면 갱신 시각도 그대로 둔다.
+ * previous는 덮어쓰기 전 기기 캐시다. 합친 차트의 선물 계약 이름을 기억하는 데만 쓴다.
+ */
+fun applyLiveQuotes(data: MarketData, live: Map<String, LiveQuote>, updatedAt: String, previous: MarketData? = null): MarketData {
     if (live.isEmpty()) return data
+    val now = parseUpdatedAt(updatedAt)?.epochSecond
     return data.copy(
         updated_at = updatedAt,
         quotes = data.quotes.map { quote ->
@@ -342,6 +426,7 @@ fun applyLiveQuotes(data: MarketData, live: Map<String, LiveQuote>, updatedAt: S
                     session_start = if (keepIntraday) quote.session_start else it.sessionStart,
                     session_end = if (keepIntraday) quote.session_end else it.sessionEnd,
                     prev_close = round2(it.prevClose),
+                    combined = combinedAfter(quote, it, now, previous),
                     stale = false,
                 )
             } ?: quote

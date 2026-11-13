@@ -67,6 +67,10 @@ import com.tmfrl.marketwidget.model.afterCompareButton
 import com.tmfrl.marketwidget.model.afterTileTap
 import com.tmfrl.marketwidget.model.bigMoveTrend
 import com.tmfrl.marketwidget.model.chartSummary
+import com.tmfrl.marketwidget.model.combinedBands
+import com.tmfrl.marketwidget.model.combinedChartFor
+import com.tmfrl.marketwidget.model.combinedXAxis
+import com.tmfrl.marketwidget.model.convertedLabel
 import com.tmfrl.marketwidget.model.compareLogChart
 import com.tmfrl.marketwidget.model.compareSeries
 import com.tmfrl.marketwidget.model.dateTicks
@@ -146,6 +150,12 @@ private val FLAT_TINT = Color(0x338B95A7)
 
 /** 최대 낙폭 구간 칠. 하락 파랑을 약 12% 알파로 옅게 깐다. */
 private val EPISODE_SHADE = Color(0x1F4D8DFF)
+
+/** 합친 24시간 차트의 정규장 띠. 낙폭 구간 칠(파랑)과 겹치지 않게 흰색을 약 8% 알파로 깐다. */
+private val SESSION_BAND = Color(0x14FFFFFF)
+
+/** 합친 24시간 차트 아래 왼쪽 문구. 창 시작이 24시간 전이다. */
+private const val COMBINED_START_LABEL = "24시간 전"
 
 /** 장중 점. 빨강·파랑은 등락 전용이라 초록을 쓴다. */
 private val LIVE_DOT = Color(0xFF34D399)
@@ -391,7 +401,7 @@ private fun QuotesAndDetail(
             // 시세 줄 아래 남는 높이를 모두 차트·일정이 쓴다
             val detailHeight = maxOf(60.dp, size.height - topPartHeightDp(grid.rows).dp)
             val chosen = data.quotes.firstOrNull { it.id == selection.selected }
-            if (chosen != null && chartValues(chosen, period).size >= 2) {
+            if (chosen != null && (chartValues(chosen, period).size >= 2 || combinedChartFor(chosen, period) != null)) {
                 // 자동모드에서는 비교하지 않는다
                 val other = if (auto) null else data.quotes.firstOrNull { it.id == selection.compare && it.id != chosen.id }
                 val state = asOf?.let { marketState(chosen, it) }
@@ -564,13 +574,27 @@ private fun ChartPanel(
         ComparePanel(quote, other, series, period, logScale, width, height, modifier)
         return
     }
-    val values = chartValues(quote, period)
+    // S&P500·나스닥100의 오늘은 현물·선물 합친 24시간 차트다. 결과가 없으면 기존 오늘 차트를 그린다.
+    val combined = combinedChartFor(quote, period)
+    val values = combined?.values ?: chartValues(quote, period)
     val summary = chartSummary(values) ?: return
-    // 오늘 차트는 전일 종가가 기준이고, 나머지는 기간 첫 값이 기준이다
+    // 오늘 차트는 전일 종가가 기준이고, 나머지는 기간 첫 값이 기준이다. 합친 차트는 기준선·등락을 합친 값으로 계산해 두었다.
     val today = period == Period.TODAY
-    val change = if (today) quote.change ?: summary.change else summary.change
-    val changePct = if (today) quote.change_pct ?: summary.changePct else summary.changePct
-    val baseline = if (today) quote.prev_close ?: values.first() else values.first()
+    val change = when {
+        combined != null -> combined.change
+        today -> quote.change ?: summary.change
+        else -> summary.change
+    }
+    val changePct = when {
+        combined != null -> combined.change_pct
+        today -> quote.change_pct ?: summary.changePct
+        else -> summary.changePct
+    }
+    val baseline = when {
+        combined != null -> combined.baseline
+        today -> quote.prev_close ?: values.first()
+        else -> values.first()
+    }
     val (color, tint) = trendColors(changePct)
     val density = LocalContext.current.resources.displayMetrics.density
     // 잠수 차트. 오늘, 낙폭 없는 지표(원/달러·달러인덱스·미 10년물·VIX), 점이 모자라면 null이다.
@@ -611,7 +635,7 @@ private fun ChartPanel(
     val shade = drawdown?.let { chart -> chart.episode?.let { it.peak..(it.recovery ?: chart.depths.lastIndex) } }
     val dots = episode?.let { listOf(it.peak to TEXT.toArgb(), it.trough to DOWN.toArgb()) }.orEmpty()
     // 로그 값도 개수가 같아 같은 눈금을 쓴다. 잠수 차트를 쌓으면 글자는 아래 잠수 차트에만 두고 가격 차트에는 세로 보조선만 그린다.
-    val xAxis = chartXAxis(quote, period)
+    val xAxis = combined?.let(::combinedXAxis) ?: chartXAxis(quote, period)
     val bitmap = detailBitmap(
         priceValues, color, bw, priceBh, scale, density,
         priceBaseline,
@@ -623,6 +647,8 @@ private fun ChartPanel(
         gutterPx = gutter,
         shade = shade,
         dots = dots,
+        breaks = combined?.breaks.orEmpty(),
+        bands = combined?.let(::combinedBands).orEmpty(),
     )
     val episodeText = drawdown?.let { formatEpisode(chartDates(quote, period), it.episode, period) }
     // 비교 안내. 고르는 중, 오늘 기간, 날짜를 맞출 수 없을 때 최저·최고 줄 자리에 쓴다.
@@ -648,6 +674,8 @@ private fun ChartPanel(
         ) {
             Text(quote.name, style = style(TEXT, 13, bold = true))
             Text("  ${period.label}$stateText", style = style(SUBTLE, 10), maxLines = 1)
+            // 합친 차트의 마지막 점이 선물 환산값이면 그 봉 시각을 작게 알린다
+            combined?.let(::convertedLabel)?.let { Text("  $it", style = style(SUBTLE, 9), maxLines = 1) }
             Spacer(GlanceModifier.defaultWeight())
             Box(modifier = GlanceModifier.background(tint).cornerRadius(6.dp).padding(horizontal = 6.dp, vertical = 2.dp)) {
                 Text(
@@ -700,10 +728,15 @@ private fun ChartPanel(
             )
         }
         Row(modifier = GlanceModifier.fillMaxWidth().padding(top = 2.dp)) {
-            val startLabel = if (period == Period.MAX && quote.max_start != null) "${quote.max_start}년~" else period.agoLabel
+            val startLabel = when {
+                combined != null -> COMBINED_START_LABEL
+                period == Period.MAX && quote.max_start != null -> "${quote.max_start}년~"
+                else -> period.agoLabel
+            }
             Text(startLabel, style = style(SUBTLE, 10))
             Spacer(GlanceModifier.defaultWeight())
-            Text("현재 ${formatPrice(quote.price)}", style = style(color, 10, bold = true))
+            // 합친 차트의 현재는 차트 마지막 점이다(장외에는 선물 환산값이라 카드 숫자와 다르다)
+            Text("현재 ${formatPrice(combined?.price ?: quote.price)}", style = style(color, 10, bold = true))
         }
         PeriodSelector(period, logScale, compareButton)
     }
@@ -786,6 +819,8 @@ private fun detailBitmap(
     areaGradient: Boolean = true,
     shade: IntRange? = null,
     dots: List<Pair<Int, Int>> = emptyList(),
+    breaks: List<Int> = emptyList(),
+    bands: List<ClosedFloatingPointRange<Float>> = emptyList(),
 ): Bitmap {
     return renderLine(
         values = values,
@@ -813,6 +848,9 @@ private fun detailBitmap(
         shade = shade,
         shadeColor = EPISODE_SHADE.toArgb(),
         dots = dots,
+        breaks = breaks,
+        bands = bands,
+        bandColor = SESSION_BAND.toArgb(),
     )
 }
 

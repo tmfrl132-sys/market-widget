@@ -3,6 +3,7 @@ package com.tmfrl.marketwidget.model
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDateTime
 import java.util.TimeZone
@@ -393,14 +394,21 @@ class LiveQuoteTest {
         assertEquals(data, applyLiveQuotes(data, emptyMap(), "new"))
     }
 
-    @Test fun symbols_coverAllThirteenQuotesInCollectorOrder() {
+    @Test fun symbols_coverAllElevenQuotesInCollectorOrder() {
+        // v1.1: 나스닥 종합(IXIC) 대신 나스닥100(NDX). 선물(ES, NQ)은 카드가 아니라 합친 차트 재료다.
         assertEquals(
-            listOf("KS11", "KQ11", "GSPC", "ES", "IXIC", "NQ", "VIX", "KRW", "DXY", "TNX", "CL", "GC", "BTC"),
+            listOf("KS11", "KQ11", "GSPC", "NDX", "VIX", "KRW", "DXY", "TNX", "CL", "GC", "BTC"),
             LIVE_SYMBOLS.keys.toList(),
         )
-        assertEquals("ES=F", LIVE_SYMBOLS["ES"])
-        assertEquals("NQ=F", LIVE_SYMBOLS["NQ"])
+        assertEquals("^NDX", LIVE_SYMBOLS["NDX"])
         assertEquals("DX-Y.NYB", LIVE_SYMBOLS["DXY"])
+        assertFalse("ES=F" in LIVE_SYMBOLS.values)
+        assertFalse("NQ=F" in LIVE_SYMBOLS.values)
+    }
+
+    @Test fun combinedFutures_onlySpAndNasdaq100WithCardSymbols() {
+        assertEquals(mapOf("GSPC" to "ES=F", "NDX" to "NQ=F"), COMBINED_FUTURES)
+        assertTrue(LIVE_SYMBOLS.keys.containsAll(COMBINED_FUTURES.keys))
     }
 
     /** 뉴욕 시간(gmtoffset -18000) range=5d 응답. 수집기 parse_chart 테스트와 같은 자료다. */
@@ -496,5 +504,101 @@ class LiveQuoteTest {
         assertEquals(5.0, merged[1].big_move_pct!!, 0.0)
         assertEquals("UTC", merged[1].market_tz)
         assertEquals(true, merged[1].always_open)
+    }
+
+    // ---- v1.1: 5일 5분봉과 합친 24시간 차트 ----
+
+    private fun resource(name: String) = LiveQuoteTest::class.java.classLoader!!.getResource(name)!!.readText()
+
+    @Test fun lastSession_from5dEqualsIntradayFrom1d_realResponses() {
+        // 2026-11-13 23:05 서울(뉴욕 개장 전)에 같은 순간 받은 range=5d와 range=1d. 카드 작은 차트와 오늘 차트가 그대로여야 한다.
+        for (name in listOf("gspc", "ndx")) {
+            val fromOneDay = parseIntraday(resource("yahoo_5m_1d_${name}_20261113.json"))
+            val fromFiveDays = parseLastSession(resource("yahoo_5m_5d_${name}_20261113.json"))
+            assertEquals(fromOneDay, fromFiveDays)
+            assertEquals(79, fromFiveDays.values.size)
+            assertEquals(LocalDateTime.of(2026, 11, 12, 23, 30).atZone(SEOUL).toEpochSecond(), fromFiveDays.sessionStart)
+            assertEquals(LocalDateTime.of(2026, 11, 13, 6, 0).atZone(SEOUL).toEpochSecond(), fromFiveDays.sessionEnd)
+            assertEquals(fromOneDay, parseLastSession(resource("yahoo_5m_1d_${name}_20261113.json")))
+        }
+        assertEquals(7592.4, parseLastSession(resource("yahoo_5m_5d_gspc_20261113.json")).values.last(), 0.0)
+    }
+
+    @Test fun lastSession_withoutTradingPeriodsKeepsLastMarketDayWithoutSession() {
+        // 뉴욕 11/4 15:55, 11/5 09:30·09:35(gmtoffset -18000)
+        val day4 = LocalDateTime.of(2026, 11, 4, 15, 55).atZone(NEW_YORK).toEpochSecond()
+        val day5 = LocalDateTime.of(2026, 11, 5, 9, 30).atZone(NEW_YORK).toEpochSecond()
+        val series = parseLastSession(intradayChart(null, listOf(day4, day5, day5 + 300), "[1.0, 2.0, 3.0]").replace("32400", "-18000"))
+        assertEquals(listOf(2.0, 3.0), series.values)
+        assertEquals(listOf(day5, day5 + 300), series.times)
+        assertNull(series.sessionStart)
+    }
+
+    @Test fun lastSession_mismatchedTimesIsEmpty() {
+        assertEquals(IntradaySeries(), parseLastSession(chart("1.0", day2, listOf(day1, day2), "[1.0]")))
+    }
+
+    @Test fun spotSeries_readsBarsSessionsAndPreviousClose() {
+        val spot = parseSpotSeries(resource("yahoo_5m_5d_gspc_20261113.json"))!!
+        assertEquals(7619.38, spot.previousClose!!, 0.0)
+        assertEquals(3, spot.sessions.size)
+        assertEquals(TradingSpan(1794493800L, 1794517200L), spot.sessions.last())
+        assertEquals(1794517200L, spot.bars.last().time)
+        assertNull(parseSpotSeries("""{"chart": {"result": null}}"""))
+    }
+
+    @Test fun futuresSeries_readsOpenCloseAndContract_skipsEmptyBars() {
+        val futures = parseFuturesSeries(resource("yahoo_5m_5d_es_20261113.json"))!!
+        assertEquals("E-Mini S&P 500 Dec 26", futures.contract)
+        assertTrue(futures.bars.all { it.open != null })
+        assertEquals(1794578107L, futures.bars.last().time)
+        // 응답에 빈 봉(null)이 있어도 건너뛴다
+        val text = resource("yahoo_5m_5d_es_20261113.json")
+        assertTrue(text.contains("null"))
+        assertEquals("Nasdaq 100 Dec 26", parseFuturesSeries(resource("yahoo_5m_5d_nq_20261113.json"))!!.contract)
+    }
+
+    private fun combinedLive(contract: String = "E-Mini S&P 500 Dec 26") = LiveQuote(
+        7592.4, -26.98, -0.35, 7619.38,
+        combinedSource = CombinedSource(
+            parseSpotSeries(resource("yahoo_5m_5d_gspc_20261113.json"))!!,
+            parseFuturesSeries(resource("yahoo_5m_5d_es_20261113.json"))!!.copy(contract = contract),
+        ),
+    )
+
+    private val realUpdatedAt = "2026-11-13T23:05:04+09:00"
+
+    @Test fun apply_computesCombinedForSp500AndKeepsCardSpot() {
+        val data = MarketData("old", listOf(quote("GSPC", 7600.0), quote("KS11", 100.0)), emptyList())
+        val merged = applyLiveQuotes(data, mapOf("GSPC" to combinedLive(), "KS11" to LiveQuote(95.0, -5.0, -5.0, 100.0)), realUpdatedAt).quotes
+        val combined = merged[0].combined!!
+        assertEquals(7626.05, combined.price, 0.0)
+        assertEquals(7592.4, combined.baseline, 0.0)
+        // 카드 숫자는 현물 시세 그대로다(장외에는 차트 현재값과 다르다)
+        assertEquals(7592.4, merged[0].price!!, 0.0)
+        assertNull(combined.roll_at)
+        assertNull(merged[1].combined)
+    }
+
+    @Test fun apply_withoutFuturesClearsPreviousCombined() {
+        val old = quote("GSPC", 7600.0).copy(combined = CombinedChart(values = listOf(1.0, 2.0), contract = "E-Mini S&P 500 Dec 26"))
+        val merged = applyLiveQuotes(MarketData("old", listOf(old), emptyList()), mapOf("GSPC" to LiveQuote(7592.4, -26.98, -0.35, 7619.38)), realUpdatedAt)
+        assertNull(merged.quotes[0].combined)
+    }
+
+    @Test fun apply_contractChangeFromPreviousCacheSetsRollAt() {
+        val previous = MarketData("old", listOf(quote("GSPC", 7600.0).copy(combined = CombinedChart(contract = "E-Mini S&P 500 Sep 26"))), emptyList())
+        // data.json에서 새로 받은 기본 데이터에는 combined가 없다. 지난 계약 이름은 직전 캐시에서 찾는다.
+        val fresh = MarketData("new", listOf(quote("GSPC", 7600.0)), emptyList())
+        val merged = applyLiveQuotes(fresh, mapOf("GSPC" to combinedLive()), realUpdatedAt, previous)
+        assertEquals(1794578704L, merged.quotes[0].combined!!.roll_at)
+        val same = applyLiveQuotes(fresh, mapOf("GSPC" to combinedLive("E-Mini S&P 500 Sep 26")), realUpdatedAt, previous)
+        assertNull(same.quotes[0].combined!!.roll_at)
+    }
+
+    @Test fun apply_unreadableUpdatedAtSkipsCombined() {
+        val merged = applyLiveQuotes(MarketData("old", listOf(quote("GSPC", 7600.0)), emptyList()), mapOf("GSPC" to combinedLive()), "new")
+        assertNull(merged.quotes[0].combined)
+        assertEquals(7592.4, merged.quotes[0].price!!, 0.0)
     }
 }

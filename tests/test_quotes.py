@@ -83,10 +83,10 @@ def test_failed_symbol_without_previous():
     assert ks11["stale"] is True
 
 
-def test_returns_all_thirteen_in_config_order():
+def test_returns_all_eleven_in_config_order():
     result = quotes.fetch_quotes({}, get=ok_get)
     assert [q["id"] for q in result] == [
-        "KS11", "KQ11", "GSPC", "ES", "IXIC", "NQ", "VIX", "KRW", "DXY", "TNX", "CL", "GC", "BTC"]
+        "KS11", "KQ11", "GSPC", "NDX", "VIX", "KRW", "DXY", "TNX", "CL", "GC", "BTC"]
 
 
 def test_prev_close_when_today_bar_is_null():
@@ -554,14 +554,17 @@ def test_symbols_config_v09():
     from zoneinfo import ZoneInfo
     from collector import config
     ids = [s[0] for s in config.SYMBOLS]
-    assert ids == ["KS11", "KQ11", "GSPC", "ES", "IXIC", "NQ", "VIX", "KRW", "DXY", "TNX", "CL", "GC", "BTC"]
-    assert dict((s[0], s[2]) for s in config.SYMBOLS)["ES"] == "ES=F"
+    assert ids == ["KS11", "KQ11", "GSPC", "NDX", "VIX", "KRW", "DXY", "TNX", "CL", "GC", "BTC"]
+    assert dict((s[0], s[2]) for s in config.SYMBOLS)["NDX"] == "^NDX"
+    assert dict((s[0], s[1]) for s in config.SYMBOLS)["NDX"] == "나스닥100"
+    assert not {"IXIC", "ES", "NQ"} & set(ids)
     assert dict((s[0], s[2]) for s in config.SYMBOLS)["DXY"] == "DX-Y.NYB"
     for id_ in ids:
         assert id_ in config.BIG_MOVE_BASE
         ZoneInfo(config.MARKET_TZ[id_])
     assert "DXY" in config.NO_DRAWDOWN
-    assert {"ES", "NQ"} <= config.STOCKS
+    assert "NDX" in config.STOCKS and not {"IXIC", "ES", "NQ"} & config.STOCKS
+    assert config.BIG_MOVE_BASE["NDX"] == 2.0
     assert config.ALWAYS_OPEN == {"BTC"}
     assert config.BIG_MOVE_DAYS == 60
     assert config.BIG_MOVE_FACTOR == 2.5

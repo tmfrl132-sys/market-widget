@@ -61,6 +61,7 @@ import com.tmfrl.marketwidget.model.MAX_CUSTOM
 import com.tmfrl.marketwidget.model.TickerCandidate
 import com.tmfrl.marketwidget.model.WidgetSettings
 import com.tmfrl.marketwidget.model.addCustom
+import com.tmfrl.marketwidget.model.builtInQuotes
 import com.tmfrl.marketwidget.model.customId
 import com.tmfrl.marketwidget.model.customStatusText
 import com.tmfrl.marketwidget.model.isAdded
@@ -84,6 +85,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.IOException
 
 // 위젯과 같은 어두운 색. 같은 앱으로 보이게 한다.
 private val BACKGROUND = Color(0xFF111827)
@@ -153,11 +155,17 @@ private class SettingsModel(
     }
 
     suspend fun load() {
-        val (saved, quotes) = withContext(Dispatchers.IO) {
-            store.read() to Repository.forContext(context).cached()?.quotes
+        // update는 옛 id(IXIC, ES, NQ)를 옮긴 설정을 저장까지 한다(v1.1). 옮길 것이 없으면 쓰지 않는다.
+        val saved = try {
+            store.update { it }
+        } catch (e: IOException) {
+            // 저장하지 못해도 화면은 옮긴 설정으로 연다. 다음 갱신이나 변경 때 다시 저장한다.
+            withContext(Dispatchers.IO) { store.read() }
         }
+        val quotes = withContext(Dispatchers.IO) { Repository.forContext(context).cached()?.quotes }
         settings = saved
-        quotes?.takeIf { it.isNotEmpty() }?.let { list -> builtIn = list.map { it.id to it.name } }
+        // 옛 data.json 캐시의 없어진 지표는 목록에 넣지 않는다
+        quotes?.let(::builtInQuotes)?.takeIf { it.isNotEmpty() }?.let { list -> builtIn = list.map { it.id to it.name } }
         reloadEntries()
     }
 

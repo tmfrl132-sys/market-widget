@@ -1,6 +1,12 @@
 package com.tmfrl.marketwidget.data
 
+import com.tmfrl.marketwidget.model.CombinedChart
+import com.tmfrl.marketwidget.model.CombinedSource
 import com.tmfrl.marketwidget.model.LiveQuote
+import com.tmfrl.marketwidget.model.encodeMarketData
+import com.tmfrl.marketwidget.model.parseFuturesSeries
+import com.tmfrl.marketwidget.model.parseMarketData
+import com.tmfrl.marketwidget.model.parseSpotSeries
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -74,6 +80,36 @@ class RepositoryTest {
         repo.refresh()
         assertEquals("2026-10-30T10:30:00+09:00", repo.cached()?.updated_at)
         assertEquals(listOf("data.json"), tmp.root.list()!!.toList())
+    }
+
+    private fun resource(name: String) = RepositoryTest::class.java.classLoader!!.getResource(name)!!.readText()
+
+    private fun gspc(time: String) =
+        """{"updated_at": "$time", "quotes": [{"id": "GSPC", "name": "S&P500", "price": 7600.0,
+           "change": 1.0, "change_pct": 0.01, "daily": [7600.0]}], "events": []}"""
+
+    @Test fun refresh_combinedUsesPreviousCacheContractAndDropsWhenFuturesMissing() = runTest {
+        val cache = tmp.root.resolve("data.json")
+        val old = parseMarketData(gspc("2026-11-13T22:00:00+09:00"))
+        cache.writeText(encodeMarketData(old.copy(quotes = old.quotes.map { it.copy(combined = CombinedChart(contract = "E-Mini S&P 500 Sep 26")) })))
+        val source = CombinedSource(
+            parseSpotSeries(resource("yahoo_5m_5d_gspc_20261113.json"))!!,
+            parseFuturesSeries(resource("yahoo_5m_5d_es_20261113.json"))!!,
+        )
+        var withFutures = true
+        val repo = Repository(
+            cache,
+            { mapOf("GSPC" to LiveQuote(7592.4, -26.98, -0.35, 7619.38, combinedSource = source.takeIf { withFutures })) },
+            { "2026-11-13T23:05:04+09:00" },
+        ) { gspc("2026-11-13T23:00:00+09:00") }
+        // data.json에는 combined가 없지만 직전 캐시의 계약 이름(Sep 26)과 비교해 교체를 알아챈다
+        val first = repo.refresh()!!.quotes.single().combined!!
+        assertEquals("E-Mini S&P 500 Dec 26", first.contract)
+        assertEquals(1794578704L, first.roll_at)
+        assertEquals(first, repo.cached()!!.quotes.single().combined)
+        // 선물을 못 받은 갱신에서는 낡은 합친 차트를 지운다
+        withFutures = false
+        assertNull(repo.refresh()!!.quotes.single().combined)
     }
 
     @Test fun cached_missing_file_is_null() {

@@ -37,7 +37,7 @@ const val KIND_INDEX = "INDEX"
 const val KIND_CRYPTO = "CRYPTOCURRENCY"
 val SUPPORTED_KINDS: Set<String> = setOf(KIND_EQUITY, KIND_ETF, KIND_INDEX, KIND_CRYPTO)
 
-/** 추가 종목 최대 개수. 기본 13개 + 8 = 21 = 7칸 × 3줄. */
+/** 추가 종목 최대 개수. 기본 11개 + 8 = 19칸(7칸이면 3줄). */
 const val MAX_CUSTOM = 8
 
 /** 기본 지표 이름. 수집기 collector/config.py SYMBOLS와 같은 순서·이름이다. 기기에 data.json이 아직 없을 때 설정 화면 이름으로 쓴다. */
@@ -45,9 +45,7 @@ val BUILT_IN_NAMES: Map<String, String> = linkedMapOf(
     "KS11" to "코스피",
     "KQ11" to "코스닥",
     "GSPC" to "S&P500",
-    "ES" to "S&P 선물",
-    "IXIC" to "나스닥",
-    "NQ" to "나스닥 선물",
+    "NDX" to "나스닥100",
     "VIX" to "VIX",
     "KRW" to "원/달러",
     "DXY" to "달러인덱스",
@@ -77,6 +75,26 @@ fun parseSettings(text: String): WidgetSettings = try {
 
 fun encodeSettings(settings: WidgetSettings): String = settingsJson.encodeToString(settings)
 
+/** v1.1에서 바뀐 기본 지표 id. 값이 null이면 없어진 지표다. 나스닥 종합 → 나스닥100, S&P·나스닥 선물 카드는 합친 차트로 들어갔다. */
+val RETIRED_IDS: Map<String, String?> = mapOf("IXIC" to "NDX", "ES" to null, "NQ" to null)
+
+/**
+ * 옛 설정의 id를 옮긴다. IXIC는 NDX가 되어 순서 자리와 켜기·끄기를 이어받고, ES·NQ는 지운다.
+ * 이미 옮긴 설정은 그대로다. 추가 종목(T:로 시작)은 건드리지 않는다.
+ */
+fun migrateSettings(settings: WidgetSettings): WidgetSettings {
+    fun migrate(ids: List<String>) = ids.mapNotNull { id -> if (id in RETIRED_IDS) RETIRED_IDS[id] else id }.distinct()
+    val order = migrate(settings.order)
+    val hidden = migrate(settings.hidden)
+    return if (order == settings.order && hidden == settings.hidden) settings else settings.copy(order = order, hidden = hidden)
+}
+
+/**
+ * data.json에서 위젯이 그릴 기본 지표. 기본 지표 목록(BUILT_IN_NAMES)에 있는 id만 남긴다.
+ * 새 앱이 옛 data.json(IXIC, ES, NQ 포함)을 받아도 없어진 지표 타일이 생기지 않는다.
+ */
+fun builtInQuotes(quotes: List<Quote>): List<Quote> = quotes.filter { it.id in BUILT_IN_NAMES }
+
 /**
  * 모든 지표 id의 보일 순서(꺼진 것 포함). order에 있는 id를 그 순서로 두고, 없는 id는
  * 기본 지표(수집기 순서) → 추가 종목(추가 순서)으로 뒤에 붙인다. order의 모르는 id는 무시한다.
@@ -93,7 +111,9 @@ fun orderedIds(builtInIds: List<String>, settings: WidgetSettings): List<String>
  * 위젯에 실제로 보일 지표. builtIn은 data.json의 기본 지표, custom은 추가 종목 캐시다.
  * 추가 종목이 캐시에 없으면 값이 빈 타일(Quote(id, name, null...))로 채운다.
  */
-fun visibleQuotes(builtIn: List<Quote>, custom: List<Quote>, settings: WidgetSettings): List<Quote> {
+fun visibleQuotes(allBuiltIn: List<Quote>, custom: List<Quote>, settings: WidgetSettings): List<Quote> {
+    // 기본 지표 목록에 없는 id(옛 data.json의 IXIC, ES, NQ)는 그리지 않는다
+    val builtIn = builtInQuotes(allBuiltIn)
     val cached = custom.associateBy { it.id }
     val byId = builtIn.associateBy { it.id } + settings.custom.associate { ticker ->
         ticker.id to (cached[ticker.id] ?: Quote(ticker.id, ticker.name, price = null, change = null, change_pct = null))

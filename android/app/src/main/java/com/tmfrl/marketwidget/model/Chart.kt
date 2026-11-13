@@ -81,6 +81,16 @@ fun chartPoints(
     }
 }
 
+/**
+ * 선을 이어 그릴 점 구간. breaks는 그 점 앞에서 선을 끊을 위치다. 범위 밖이나 0인 위치는 무시한다.
+ * breaks가 비면 0 until size 하나라 지금까지와 같은 선이다.
+ */
+fun lineSegments(size: Int, breaks: List<Int>): List<IntRange> {
+    if (size <= 0) return emptyList()
+    val cuts = breaks.filter { it in 1 until size }.distinct().sorted()
+    return (listOf(0) + cuts).zip(cuts + size) { from, to -> from until to }
+}
+
 data class ChartSummary(val min: Double, val max: Double, val change: Double, val changePct: Double)
 
 /** 차트 기간의 최저·최고와 처음 대비 마지막 차이·등락률. */

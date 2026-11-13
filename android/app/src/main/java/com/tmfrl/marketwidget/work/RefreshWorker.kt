@@ -26,6 +26,8 @@ class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorke
 
     override suspend fun doWork(): Result {
         val context = applicationContext
+        // 앱 업데이트 뒤 첫 갱신에서 옛 설정 id(IXIC, ES, NQ)를 옮겨 저장한다. 옮길 것이 없으면 쓰지 않는다.
+        quietly { SettingsStore.forContext(context).update { it } }
         // 기본 지표와 추가 종목을 함께 받는다. 한쪽이 실패해도 다른 쪽은 반영한다.
         coroutineScope {
             launch { quietly { Repository.forContext(context).refresh() } }

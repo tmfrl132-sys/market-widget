@@ -1,6 +1,8 @@
 package com.tmfrl.marketwidget.data
 
 import android.content.Context
+import com.tmfrl.marketwidget.model.COMBINED_FUTURES
+import com.tmfrl.marketwidget.model.CombinedSource
 import com.tmfrl.marketwidget.model.IntradaySeries
 import com.tmfrl.marketwidget.model.LIVE_SYMBOLS
 import com.tmfrl.marketwidget.model.LiveQuote
@@ -8,11 +10,14 @@ import com.tmfrl.marketwidget.model.MarketData
 import com.tmfrl.marketwidget.model.NAVER_CODES
 import com.tmfrl.marketwidget.model.applyLiveQuotes
 import com.tmfrl.marketwidget.model.encodeMarketData
+import com.tmfrl.marketwidget.model.parseFuturesSeries
 import com.tmfrl.marketwidget.model.parseIntraday
+import com.tmfrl.marketwidget.model.parseLastSession
 import com.tmfrl.marketwidget.model.parseLiveQuote
 import com.tmfrl.marketwidget.model.parseNaverIndex
 import com.tmfrl.marketwidget.model.parseNaverMinutes
 import com.tmfrl.marketwidget.model.parseMarketData
+import com.tmfrl.marketwidget.model.parseSpotSeries
 import com.tmfrl.marketwidget.model.withIntraday
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -27,6 +32,9 @@ import java.time.OffsetDateTime
 const val DATA_URL = "https://tmfrl132-sys.github.io/market-widget/data.json"
 internal const val YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/%s?range=5d&interval=1d"
 internal const val INTRADAY_URL = "https://query1.finance.yahoo.com/v8/finance/chart/%s?range=1d&interval=5m"
+
+/** 5일 5분봉. S&P500·나스닥100 현물과 그 선물(합친 24시간 차트 재료)에 쓴다. */
+internal const val INTRADAY_5D_URL = "https://query1.finance.yahoo.com/v8/finance/chart/%s?range=5d&interval=5m"
 private const val NAVER_INDEX_URL = "https://m.stock.naver.com/api/index/%s/basic"
 private const val NAVER_MINUTE_URL = "https://api.stock.naver.com/chart/domestic/index/%s/minute"
 
@@ -42,14 +50,16 @@ class Repository(
 ) {
 
     suspend fun refresh(): MarketData? = withContext(Dispatchers.IO) {
+        // 덮어쓰기 전 캐시. 합친 차트의 선물 계약 이름(교체 보정)을 이어 쓴다.
+        val previous = cached()
         val base = try {
             parseMarketData(fetch())
         } catch (e: IOException) {
-            cached()
+            previous
         } catch (e: IllegalArgumentException) { // 잘못된 JSON (SerializationException 포함)
-            cached()
+            previous
         }
-        val data = base?.let { applyLiveQuotes(it, fetchLive(), now()) }
+        val data = base?.let { applyLiveQuotes(it, fetchLive(), now(), previous) }
         if (data != null) writeAtomic(cacheFile, encodeMarketData(data))
         data
     }
@@ -67,11 +77,11 @@ class Repository(
         fun forContext(context: Context) =
             Repository(File(context.filesDir, "data.json"), ::fetchLiveQuotes) { httpGet(DATA_URL) }
 
-        /** LIVE_SYMBOLS 13개를 한꺼번에 받는다. 실패한 항목은 결과에서 빠진다. */
+        /** LIVE_SYMBOLS 11개를 한꺼번에 받는다. 실패한 항목은 결과에서 빠진다. */
         private suspend fun fetchLiveQuotes(): Map<String, LiveQuote> = coroutineScope {
             LIVE_SYMBOLS.map { (id, symbol) ->
                 async(Dispatchers.IO) {
-                    val live = NAVER_CODES[id]?.let(::fetchNaver) ?: fetchYahoo(symbol)
+                    val live = NAVER_CODES[id]?.let(::fetchNaver) ?: fetchYahoo(symbol, COMBINED_FUTURES[id])
                     live?.let { id to it }
                 }
             }.awaitAll().filterNotNull().toMap()
@@ -84,12 +94,31 @@ class Repository(
             )
         }
 
-        private fun fetchYahoo(symbol: String): LiveQuote? = orElse(null) {
-            val encoded = URLEncoder.encode(symbol, "UTF-8")
-            parseLiveQuote(httpGet(YAHOO_URL.format(encoded)))?.withIntraday(
+        private fun encode(symbol: String): String = URLEncoder.encode(symbol, "UTF-8")
+
+        /** futuresSymbol이 있으면(S&P500·나스닥100) 5일 5분봉과 그 선물 5일 5분봉도 받아 합친 차트 재료를 붙인다. */
+        private fun fetchYahoo(symbol: String, futuresSymbol: String?): LiveQuote? = orElse(null) {
+            val encoded = encode(symbol)
+            val live = parseLiveQuote(httpGet(YAHOO_URL.format(encoded))) ?: return@orElse null
+            if (futuresSymbol == null) {
                 // 5분봉이 실패해도 시세는 살린다
-                orElse(IntradaySeries()) { parseIntraday(httpGet(INTRADAY_URL.format(encoded))) },
-            )
+                live.withIntraday(orElse(IntradaySeries()) { parseIntraday(httpGet(INTRADAY_URL.format(encoded))) })
+            } else {
+                withCombinedSource(live, encoded, futuresSymbol)
+            }
+        }
+
+        /**
+         * 현물 5일 5분봉에서 오늘 차트(마지막 정규장)를 뽑고, 선물 5일 5분봉까지 받으면 합친 차트 재료를 붙인다.
+         * 어느 쪽이 실패해도 시세는 살린다. 선물을 못 받으면 재료가 없어 합친 차트를 지운다(applyLiveQuotes).
+         */
+        private fun withCombinedSource(live: LiveQuote, encodedSpot: String, futuresSymbol: String): LiveQuote {
+            val spotText = orElse<String?>(null) { httpGet(INTRADAY_5D_URL.format(encodedSpot)) }
+            val intraday = spotText?.let { text -> orElse(IntradaySeries()) { parseLastSession(text) } } ?: IntradaySeries()
+            val spot = spotText?.let { text -> orElse(null) { parseSpotSeries(text) } }
+            val futures = spot?.let { orElse(null) { parseFuturesSeries(httpGet(INTRADAY_5D_URL.format(encode(futuresSymbol)))) } }
+            val source = if (spot != null && futures != null) CombinedSource(spot, futures) else null
+            return live.withIntraday(intraday).copy(combinedSource = source)
         }
     }
 }

@@ -46,6 +46,7 @@ data class Quote(
     val mdd_peak_date: String? = null, // MDD 직전 고점 날짜 YYYY-MM-DD
     val mdd_trough_date: String? = null, // MDD 바닥 날짜
     val mdd_recovery_date: String? = null, // 바닥 뒤 처음 고점 이상이 된 날짜. 미회복이면 null
+    val combined: CombinedChart? = null, // 현물·선물 합친 24시간 차트(S&P500·나스닥100). 기기가 갱신 때 계산한다. 수집기는 보내지 않는다
 
     val stale: Boolean = false,
 )

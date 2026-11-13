@@ -12,6 +12,7 @@ import com.tmfrl.marketwidget.model.XTick
 import com.tmfrl.marketwidget.model.YAxis
 import com.tmfrl.marketwidget.model.chartPoints
 import com.tmfrl.marketwidget.model.formatPrice
+import com.tmfrl.marketwidget.model.lineSegments
 import com.tmfrl.marketwidget.model.placeXLabels
 import com.tmfrl.marketwidget.model.stackLabels
 import com.tmfrl.marketwidget.model.yAxisFor
@@ -34,6 +35,8 @@ import com.tmfrl.marketwidget.model.yPosition
  * shade는 그림 영역 전체 높이로 옅게 칠할 점 범위(최대 낙폭 구간)이고 shadeColor로 칠한다. 영역 채우기보다 먼저 그린다.
  * dots는 따로 찍을 점(위치와 색). 반지름은 선 굵기의 2배이고 배경색 테두리를 두른다.
  * baselineLabel이 빈 문자열이면 점선 문구와 그 배경 칸을 그리지 않는다.
+ * breaks는 선과 영역을 끊을 점 위치(그 점 앞에서 끊는다, 합친 24시간 차트의 정비 시간·주말)다. 비면 지금처럼 한 선이다.
+ * bands는 그림 영역 높이로 옅게 칠할 가로 구간(0~1, 정규장)이고 bandColor로 칠한다. detailed일 때만 쓰고 가장 먼저 그린다.
  */
 fun renderLine(
     values: List<Double>,
@@ -61,6 +64,9 @@ fun renderLine(
     shade: IntRange? = null,
     shadeColor: Int = 0,
     dots: List<Pair<Int, Int>> = emptyList(),
+    breaks: List<Int> = emptyList(),
+    bands: List<ClosedFloatingPointRange<Float>> = emptyList(),
+    bandColor: Int = 0,
 ): Bitmap {
     val w = widthPx.coerceAtLeast(2)
     val h = heightPx.coerceAtLeast(2)
@@ -89,6 +95,15 @@ fun renderLine(
     val points = chartPoints(values, plotW, plotH, pad, axis, xPositions)
     if (points.isEmpty()) return bitmap
 
+    // 정규장 띠도 구간 칠처럼 가장 아래에 깐다. 가로 위치는 chartPoints와 같은 식이다.
+    if (detailed && bands.isNotEmpty()) {
+        val bandPaint = Paint().apply { color = bandColor }
+        bands.forEach { band ->
+            val left = pad + band.start * (plotW - 2 * pad)
+            val right = pad + band.endInclusive * (plotW - 2 * pad)
+            if (right > left) canvas.drawRect(left, 0f, right, plotH, bandPaint)
+        }
+    }
     // 구간 칠은 눈금선·영역·선 아래에 깔리게 가장 먼저 그린다
     if (detailed && shade != null && shade.first in points.indices && shade.last in points.indices) {
         canvas.drawRect(points[shade.first].first, 0f, points[shade.last].first, plotH, Paint().apply { color = shadeColor })
@@ -102,7 +117,8 @@ fun renderLine(
         xLabels.forEach { canvas.drawLine(it.x, 0f, it.x, plotH, grid) }
     }
 
-    val line = linePath(points)
+    val segments = lineSegments(points.size, breaks)
+    val line = linePath(points, segments)
     val secondPoints = second?.let { chartPoints(it, plotW, plotH, pad, axis, xPositions) }.orEmpty()
     if (detailed && second == null) {
         val floor = if (axis != null && areaBase != null) {
@@ -110,10 +126,15 @@ fun renderLine(
         } else {
             plotH - pad
         }
-        val area = Path(line).apply {
-            lineTo(points.last().first, floor)
-            lineTo(points.first().first, floor)
-            close()
+        // 끊긴 구간마다 따로 닫는다. 구간이 하나면 지금까지와 같은 영역이다.
+        val area = Path().apply {
+            segments.filterNot { it.isEmpty() }.forEach { range ->
+                moveTo(points[range.first].first, points[range.first].second)
+                for (i in range.first + 1..range.last) lineTo(points[i].first, points[i].second)
+                lineTo(points[range.last].first, floor)
+                lineTo(points[range.first].first, floor)
+                close()
+            }
         }
         val top = (0x66 shl 24) or (lineColor and 0x00FFFFFF)
         val bottom = lineColor and 0x00FFFFFF
@@ -145,9 +166,15 @@ fun renderLine(
     return bitmap
 }
 
-private fun linePath(points: List<Pair<Float, Float>>) = Path().apply {
-    moveTo(points[0].first, points[0].second)
-    points.drop(1).forEach { (x, y) -> lineTo(x, y) }
+/** 구간마다 moveTo로 새로 시작한다. segments를 주지 않으면 모든 점을 한 선으로 잇는다. */
+private fun linePath(
+    points: List<Pair<Float, Float>>,
+    segments: List<IntRange> = listOf(points.indices),
+) = Path().apply {
+    segments.filterNot { it.isEmpty() }.forEach { range ->
+        moveTo(points[range.first].first, points[range.first].second)
+        for (i in range.first + 1..range.last) lineTo(points[i].first, points[i].second)
+    }
 }
 
 private fun strokePaint(lineColor: Int, strokePx: Float) = Paint(Paint.ANTI_ALIAS_FLAG).apply {

@@ -13,7 +13,7 @@ class CompareTest {
     }
 
     @Test fun picking_otherTileBecomesCompare() {
-        assertEquals(ChartSelection("KS11", "NQ", false), afterTileTap(ChartSelection("KS11", null, true), "NQ", auto = false))
+        assertEquals(ChartSelection("KS11", "NDX", false), afterTileTap(ChartSelection("KS11", null, true), "NDX", auto = false))
     }
 
     @Test fun picking_sameTileCancels() {
@@ -21,23 +21,23 @@ class CompareTest {
     }
 
     @Test fun comparing_buttonTurnsOff() {
-        assertEquals(ChartSelection("KS11", null, false), afterCompareButton(ChartSelection("KS11", "NQ", false)))
+        assertEquals(ChartSelection("KS11", null, false), afterCompareButton(ChartSelection("KS11", "NDX", false)))
     }
 
     @Test fun comparing_otherTileKeepsCompare() {
-        assertEquals(ChartSelection("GSPC", "NQ", false), afterTileTap(ChartSelection("KS11", "NQ", false), "GSPC", auto = false))
+        assertEquals(ChartSelection("GSPC", "NDX", false), afterTileTap(ChartSelection("KS11", "NDX", false), "GSPC", auto = false))
     }
 
     @Test fun comparing_compareTileBecomesSingleChart() {
-        assertEquals(ChartSelection("NQ", null, false), afterTileTap(ChartSelection("KS11", "NQ", false), "NQ", auto = false))
+        assertEquals(ChartSelection("NDX", null, false), afterTileTap(ChartSelection("KS11", "NDX", false), "NDX", auto = false))
     }
 
     @Test fun comparing_selectedTileOrChartCloses() {
-        assertEquals(ChartSelection(null, null, false), afterTileTap(ChartSelection("KS11", "NQ", false), "KS11", auto = false))
+        assertEquals(ChartSelection(null, null, false), afterTileTap(ChartSelection("KS11", "NDX", false), "KS11", auto = false))
     }
 
     @Test fun autoOn_clearsCompareAndPicking() {
-        assertEquals(ChartSelection("KS11", null, false), afterAutoOn(ChartSelection("KS11", "NQ", false)))
+        assertEquals(ChartSelection("KS11", null, false), afterAutoOn(ChartSelection("KS11", "NDX", false)))
         assertEquals(ChartSelection("KS11", null, false), afterAutoOn(ChartSelection("KS11", null, true)))
     }
 
@@ -70,7 +70,7 @@ class CompareTest {
     private val oneYearPrimary = daily(
         "KS11", listOf("2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08"), listOf(200.0, 210.0, 220.0, 230.0),
     )
-    private val oneYearOther = daily("NQ", listOf("2026-01-02", "2026-01-06", "2026-01-08"), listOf(50.0, 55.0, 60.0))
+    private val oneYearOther = daily("NDX", listOf("2026-01-02", "2026-01-06", "2026-01-08"), listOf(50.0, 55.0, 60.0))
 
     @Test fun series_oneYearCarriesLastKnownValue() {
         val series = compareSeries(oneYearPrimary, oneYearOther, Period.ONE_YEAR)!!
@@ -96,7 +96,7 @@ class CompareTest {
     }
 
     @Test fun series_nullWhenOtherDatesReversed() {
-        val reversed = daily("NQ", listOf("2026-01-08", "2026-01-06", "2026-01-02"), listOf(60.0, 55.0, 50.0))
+        val reversed = daily("NDX", listOf("2026-01-08", "2026-01-06", "2026-01-02"), listOf(60.0, 55.0, 50.0))
         assertNull(compareSeries(oneYearPrimary, reversed, Period.ONE_YEAR))
     }
 
@@ -106,7 +106,7 @@ class CompareTest {
     }
 
     @Test fun series_nullWhenOnePointLeft() {
-        val late = daily("NQ", listOf("2026-01-08"), listOf(60.0))
+        val late = daily("NDX", listOf("2026-01-08"), listOf(60.0))
         assertNull(compareSeries(oneYearPrimary, late, Period.ONE_YEAR))
     }
 
