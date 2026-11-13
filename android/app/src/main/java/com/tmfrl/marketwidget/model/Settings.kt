@@ -81,13 +81,21 @@ val RETIRED_IDS: Map<String, String?> = mapOf("IXIC" to "NDX", "ES" to null, "NQ
 /**
  * 옛 설정의 id를 옮긴다. IXIC는 NDX가 되어 순서 자리와 켜기·끄기를 이어받고, ES·NQ는 지운다.
  * 이미 옮긴 설정은 그대로다. 추가 종목(T:로 시작)은 건드리지 않는다.
+ * 옮긴 결과 켜진 기본 지표와 추가 종목이 모두 0개면 S&P500과 나스닥100을 켠다("최소 1개 켜기" 규칙 유지).
  */
 fun migrateSettings(settings: WidgetSettings): WidgetSettings {
     fun migrate(ids: List<String>) = ids.mapNotNull { id -> if (id in RETIRED_IDS) RETIRED_IDS[id] else id }.distinct()
     val order = migrate(settings.order)
-    val hidden = migrate(settings.hidden)
-    return if (order == settings.order && hidden == settings.hidden) settings else settings.copy(order = order, hidden = hidden)
+    val migratedHidden = migrate(settings.hidden)
+    if (order == settings.order && migratedHidden == settings.hidden) return settings
+    // 옛 설정에서 선물(ES·NQ)만 켜 두었으면 옮긴 뒤 켜진 지표가 0개가 된다. 그 자리를 대신하는 S&P500·나스닥100을 켠다.
+    val shown = (BUILT_IN_NAMES.keys + settings.custom.map { it.id }).filter { it !in migratedHidden }
+    val hidden = if (shown.isEmpty()) migratedHidden - FUTURES_REPLACEMENTS else migratedHidden
+    return settings.copy(order = order, hidden = hidden)
 }
+
+/** 옛 선물 카드를 대신하는 기본 지표. 이전 뒤 켜진 지표가 없을 때 켠다. */
+private val FUTURES_REPLACEMENTS = setOf("GSPC", "NDX")
 
 /**
  * data.json에서 위젯이 그릴 기본 지표. 기본 지표 목록(BUILT_IN_NAMES)에 있는 id만 남긴다.

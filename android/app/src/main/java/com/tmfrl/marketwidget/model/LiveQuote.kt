@@ -84,7 +84,6 @@ private data class ChartMeta(
     // 응답마다 형식이 다를 수 있어 시세 해석이 실패하지 않게 직접 읽는다
     val tradingPeriods: JsonElement? = null,
     val previousClose: Double? = null,
-    val shortName: String? = null,
 )
 
 @Serializable
@@ -186,6 +185,7 @@ fun parseSpotSeries(text: String): SpotSeries? {
 /**
  * 선물 range=5d 5분봉 응답을 읽는다. 선물 tradingPeriods는 뉴욕 날짜 00:00~23:59라 실제 거래 시간이 아니어서 쓰지 않는다.
  * 시가 목록 길이가 다르면 시가는 모두 null이다. 봉이 없거나 시각과 종가 수가 다르면 null.
+ * 계약 이름은 읽지 않는다. 계약 교체는 기준을 매 갱신 같은 응답의 정규장 종가로 다시 잡아 흡수한다.
  */
 fun parseFuturesSeries(text: String): FuturesSeries? {
     val result = json.decodeFromString<ChartResponse>(text).chart.result?.firstOrNull() ?: return null
@@ -196,7 +196,7 @@ fun parseFuturesSeries(text: String): FuturesSeries? {
         bars.close[i]?.let { FuturesBar(result.timestamp[i], opens?.get(i), it) }
     }
     if (rows.isEmpty()) return null
-    return FuturesSeries(rows, result.meta.shortName?.takeIf { it.isNotBlank() })
+    return FuturesSeries(rows)
 }
 
 /** Yahoo 차트 응답에서 현재값과 전일 대비를 구한다. 계산은 수집기 parse_chart와 같다. 값이 모자라면 null. */
@@ -377,21 +377,16 @@ private fun latestEpisode(quote: Quote, price: Double, depth: Double?, updatedAt
 /**
  * 합친 24시간 차트(S&P500·나스닥100). 이번 갱신에 재료(현물·선물 5일 5분봉)를 받았으면 새로 계산하고, 못 받았으면 null이다.
  * 낡은 합친 차트를 남기지 않기 위해서다(그러면 기존 오늘 차트를 그린다). 다른 지표는 그대로 둔다.
- * 계약 교체 보정에 쓰는 지난 결과는 직전 캐시(previous)에서, 없으면 덮어쓸 데이터에서 찾는다.
  */
-private fun combinedAfter(quote: Quote, live: LiveQuote, now: Long?, previous: MarketData?): CombinedChart? {
+private fun combinedAfter(quote: Quote, live: LiveQuote, now: Long?): CombinedChart? {
     if (quote.id !in COMBINED_FUTURES) return quote.combined
     val source = live.combinedSource ?: return null
     if (now == null) return null
-    val before = previous?.quotes?.firstOrNull { it.id == quote.id }?.combined ?: quote.combined
-    return combine24h(source.spot, source.futures, now, rollAtFor(before, source.futures.contract, now))
+    return combine24h(source.spot, source.futures, now)
 }
 
-/**
- * 직접 받은 시세를 덮어쓰고 차트 끝과 낙폭도 맞춘다. 받지 못한 항목은 그대로 두고, 하나도 못 받았으면 갱신 시각도 그대로 둔다.
- * previous는 덮어쓰기 전 기기 캐시다. 합친 차트의 선물 계약 이름을 기억하는 데만 쓴다.
- */
-fun applyLiveQuotes(data: MarketData, live: Map<String, LiveQuote>, updatedAt: String, previous: MarketData? = null): MarketData {
+/** 직접 받은 시세를 덮어쓰고 차트 끝과 낙폭도 맞춘다. 받지 못한 항목은 그대로 두고, 하나도 못 받았으면 갱신 시각도 그대로 둔다. */
+fun applyLiveQuotes(data: MarketData, live: Map<String, LiveQuote>, updatedAt: String): MarketData {
     if (live.isEmpty()) return data
     val now = parseUpdatedAt(updatedAt)?.epochSecond
     return data.copy(
@@ -426,7 +421,7 @@ fun applyLiveQuotes(data: MarketData, live: Map<String, LiveQuote>, updatedAt: S
                     session_start = if (keepIntraday) quote.session_start else it.sessionStart,
                     session_end = if (keepIntraday) quote.session_end else it.sessionEnd,
                     prev_close = round2(it.prevClose),
-                    combined = combinedAfter(quote, it, now, previous),
+                    combined = combinedAfter(quote, it, now),
                     stale = false,
                 )
             } ?: quote

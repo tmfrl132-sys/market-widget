@@ -50,16 +50,14 @@ class Repository(
 ) {
 
     suspend fun refresh(): MarketData? = withContext(Dispatchers.IO) {
-        // 덮어쓰기 전 캐시. 합친 차트의 선물 계약 이름(교체 보정)을 이어 쓴다.
-        val previous = cached()
         val base = try {
             parseMarketData(fetch())
         } catch (e: IOException) {
-            previous
+            cached()
         } catch (e: IllegalArgumentException) { // 잘못된 JSON (SerializationException 포함)
-            previous
+            cached()
         }
-        val data = base?.let { applyLiveQuotes(it, fetchLive(), now(), previous) }
+        val data = base?.let { applyLiveQuotes(it, fetchLive(), now()) }
         if (data != null) writeAtomic(cacheFile, encodeMarketData(data))
         data
     }

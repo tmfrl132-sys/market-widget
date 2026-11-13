@@ -52,13 +52,14 @@ class CombinedTest {
             listOf(SpotBar(ny("2026-11-12", "15:50"), 7590.0), SpotBar(ny("2026-11-12", "15:55"), 7591.0), SpotBar(ny("2026-11-12", "16:00"), 7592.0)),
             listOf(session("2026-11-12")),
         )
+        // 봉 종가는 봉 끝 가격이다. 선물 15:55 봉 종가 7,616이 16:00 가격이고, 현물 16:00 봉(공식 종가 7,592)과 짝이다.
+        // 선물 16:00 봉 종가(7,630)는 16:05 가격이라 Fc가 아니다.
         val futures = FuturesSeries(
             listOf(
-                FuturesBar(ny("2026-11-12", "15:55"), 7615.0, 7615.0),
-                FuturesBar(ny("2026-11-12", "16:00"), 7616.0, 7616.0),
+                FuturesBar(ny("2026-11-12", "15:55"), 7615.0, 7616.0),
+                FuturesBar(ny("2026-11-12", "16:00"), 7616.0, 7630.0),
                 FuturesBar(ny("2026-11-12", "16:05"), 7630.0, 7640.0),
             ),
-            "E-Mini S&P 500 Dec 26",
         )
         val chart = combine24h(spot, futures, now = ny("2026-11-12", "16:10"))!!
         // 정규장 안 선물 봉(15:55, 16:00)은 버리고 현물을 쓴다
@@ -72,8 +73,49 @@ class CombinedTest {
         assertEquals(7615.92, chart.high, 0.0)
         assertEquals(emptyList<Int>(), chart.breaks)
         assertEquals(listOf(session("2026-11-12")), chart.sessions)
-        assertEquals("E-Mini S&P 500 Dec 26", chart.contract)
         assertTrue(chart.lastConverted)
+    }
+
+    // ---- 장 마감 짝: 같은 가격 시각 ----
+
+    private val closingPrint = SpotSeries(
+        listOf(SpotBar(ny("2026-11-12", "15:50"), 99.0), SpotBar(ny("2026-11-12", "15:55"), 99.5), SpotBar(ny("2026-11-12", "16:00"), 100.0)),
+        listOf(session("2026-11-12")),
+    )
+
+    @Test fun closingPrintBar_pairsWithFuturesBarBeforeIt() {
+        val futures = FuturesSeries(
+            listOf(
+                FuturesBar(ny("2026-11-12", "15:55"), 199.0, 200.0),
+                FuturesBar(ny("2026-11-12", "16:00"), 200.0, 210.0),
+                FuturesBar(ny("2026-11-12", "16:05"), 210.0, 210.0),
+            ),
+        )
+        // Fc = 15:55 봉 종가 200(16:00 가격). 16:00 봉 종가 210(16:05 가격)을 쓰면 100.0이 되어 16:00~16:05 움직임이 사라진다.
+        assertEquals(105.0, combine24h(closingPrint, futures, ny("2026-11-12", "16:10"))!!.price, 0.0)
+    }
+
+    @Test fun closingPrintBar_withoutBarBeforeUsesOpenOfSameBar() {
+        val futures = FuturesSeries(
+            listOf(FuturesBar(ny("2026-11-12", "16:00"), 200.0, 210.0), FuturesBar(ny("2026-11-12", "16:05"), 210.0, 202.0)),
+        )
+        assertEquals(101.0, combine24h(closingPrint, futures, ny("2026-11-12", "16:10"))!!.price, 0.0)
+    }
+
+    @Test fun closingPrintBar_withoutEitherBarOffHoursNotDrawn() {
+        val futures = FuturesSeries(listOf(FuturesBar(ny("2026-11-12", "16:00"), null, 210.0), FuturesBar(ny("2026-11-12", "16:05"), 210.0, 202.0)))
+        val chart = combine24h(closingPrint, futures, ny("2026-11-12", "16:10"))!!
+        assertTrue(chart.converted.none { it })
+        assertEquals(ny("2026-11-12", "16:00"), chart.times.last())
+    }
+
+    @Test fun lastBarBeforeSessionEnd_pairsWithSameTimeFuturesBar() {
+        // 15:55 현물 봉 종가와 15:55 선물 봉 종가는 둘 다 16:00 가격이다
+        val spot = closingPrint.copy(bars = closingPrint.bars.dropLast(1))
+        val futures = FuturesSeries(
+            listOf(FuturesBar(ny("2026-11-12", "15:50"), 190.0, 190.0), FuturesBar(ny("2026-11-12", "15:55"), 199.0, 199.0), FuturesBar(ny("2026-11-12", "16:05"), 201.0, 201.0)),
+        )
+        assertEquals(100.5, combine24h(spot, futures, ny("2026-11-12", "16:10"))!!.price, 0.0)
     }
 
     // ---- 실제 자료 ----
@@ -89,21 +131,23 @@ class CombinedTest {
         assertEquals(1794492300L, chart.times.first())
         assertEquals(7567.5, chart.values.first(), 0.0)
         assertEquals(1794578107L, chart.times.last())
-        assertEquals(7626.05, chart.price, 0.0)
+        // 기준 짝: 현물 16:00 공식 종가 7,592.40 ↔ 선물 15:55 봉 종가 7,616.25(16:00 가격)
+        assertEquals(7624.8, chart.price, 0.0)
         assertEquals(7592.4, chart.baseline, 0.0)
-        assertEquals(33.65, chart.change, 0.0)
-        assertEquals(0.44, chart.change_pct, 0.0)
+        assertEquals(32.4, chart.change, 0.0)
+        assertEquals(0.43, chart.change_pct, 0.0)
         assertEquals(7558.28, chart.low, 0.0)
         assertEquals(7649.21, chart.high, 0.0)
         assertEquals(196, chart.converted.count { it })
         assertEquals(listOf(95), chart.breaks)
-        assertEquals("E-Mini S&P 500 Dec 26", chart.contract)
         assertEquals(listOf(TradingSpan(1794493800L, 1794517200L)), chart.sessions)
         // 이음매: 09:25 환산 → 09:30 현물, 16:00 현물 → 16:05 환산
         assertEquals(7560.03, valueAt(chart, ny("2026-11-12", "09:25")), 0.0)
         assertEquals(7576.3, valueAt(chart, ny("2026-11-12", "09:30")), 0.0)
         assertEquals(7592.4, valueAt(chart, ny("2026-11-12", "16:00")), 0.0)
-        assertEquals(7597.88, valueAt(chart, ny("2026-11-12", "16:05")), 0.0)
+        assertEquals(7596.64, valueAt(chart, ny("2026-11-12", "16:05")), 0.0)
+        assertEquals(7597.88, valueAt(chart, ny("2026-11-12", "16:55")), 0.0)
+        assertEquals(7603.37, valueAt(chart, ny("2026-11-12", "18:00")), 0.0)
         // 정비 공백(16:55~18:00)에서 끊는다
         assertEquals(ny("2026-11-12", "16:55"), chart.times[94])
         assertEquals(ny("2026-11-12", "18:00"), chart.times[95])
@@ -115,17 +159,18 @@ class CombinedTest {
         assertEquals(275, chart.values.size)
         assertEquals(1794492300L, chart.times.first())
         assertEquals(27994.73, chart.values.first(), 0.0)
-        assertEquals(28332.78, chart.price, 0.0)
+        // 기준 짝: 현물 16:00 28,289.19 ↔ 선물 15:55 봉 종가 28,388.25
+        assertEquals(28333.03, chart.price, 0.0)
         assertEquals(28289.19, chart.baseline, 0.0)
-        assertEquals(43.6, chart.change, 0.0)
+        assertEquals(43.85, chart.change, 0.0)
         assertEquals(0.15, chart.change_pct, 0.0)
         assertEquals(27953.39, chart.low, 0.0)
         assertEquals(28525.78, chart.high, 0.0)
         assertEquals(listOf(95), chart.breaks)
-        assertEquals("Nasdaq 100 Dec 26", chart.contract)
         assertEquals(27957.37, valueAt(chart, ny("2026-11-12", "09:25")), 0.0)
         assertEquals(28103.21, valueAt(chart, ny("2026-11-12", "09:30")), 0.0)
-        assertEquals(28325.06, valueAt(chart, ny("2026-11-12", "16:05")), 0.0)
+        assertEquals(28325.31, valueAt(chart, ny("2026-11-12", "16:05")), 0.0)
+        assertEquals(28347.48, valueAt(chart, ny("2026-11-12", "18:00")), 0.0)
     }
 
     @Test fun real_sameTimeOpenSeamIsSmall() {
@@ -256,10 +301,10 @@ class CombinedTest {
         assertEquals(ny("2026-11-12", "16:55"), chart.times[gapAt - 1])
         // 정비 시간에는 점이 없다
         assertTrue(chart.times.none { it > ny("2026-11-12", "16:55") && it < ny("2026-11-12", "18:00") })
-        // Fc는 16:00 선물 봉(200 + 6)
-        assertEquals(106.8, chart.values[gapAt], 0.0)
-        // 자정 10분 빈 봉 뒤도 같은 기준(100 × 230 / 206)
-        assertEquals(111.65, chart.values.last(), 0.0)
+        // 현물 마지막 봉이 16:00 종가 봉이라 Fc는 선물 15:55 봉 종가(200 + 5)
+        assertEquals(107.32, chart.values[gapAt], 0.0)
+        // 자정 10분 빈 봉 뒤도 같은 기준(100 × 230 / 205)
+        assertEquals(112.2, chart.values.last(), 0.0)
     }
 
     @Test fun lineSegments_followBreaks() {
@@ -278,7 +323,7 @@ class CombinedTest {
             previousClose = 99.0,
         )
         val futures = FuturesSeries(
-            futuresBars("2026-11-12", "15:55", "16:55") { if (it == 1) 198.0 else 199.0 } +
+            futuresBars("2026-11-12", "15:55", "16:55") { if (it == 0) 198.0 else 199.0 } +
                 futuresBars("2026-11-12", "18:00", "23:55") { 200.0 } +
                 futuresBars("2026-11-13", "00:05", "16:55") { if (it <= 197) 200.0 else 202.0 },
         )
@@ -289,7 +334,7 @@ class CombinedTest {
         assertEquals(ny("2026-11-12", "18:00"), chart.times.first())
         assertEquals(100.0, chart.values.first(), 0.0)
         assertEquals(ny("2026-11-13", "16:55"), chart.times.last())
-        // 장 마감 뒤라 기준선은 금요일 종가, 마지막 점은 금요일 기준 환산값(100 × 202 / 금 16:00 선물 200)
+        // 장 마감 뒤라 기준선은 금요일 종가, 마지막 점은 금요일 기준 환산값(100 × 202 / 금 15:55 선물 봉 종가 200)
         assertEquals(100.0, chart.baseline, 0.0)
         assertEquals(101.0, chart.price, 0.0)
         assertEquals(1.0, chart.change_pct, 0.0)
@@ -409,50 +454,30 @@ class CombinedTest {
         assertNull(combine24h(spot, FuturesSeries(emptyList()), ny("2026-11-12", "09:40")))
     }
 
-    // ---- 롤오버 ----
+    // ---- 롤오버: 따로 보정하지 않고 정규장 종가 기준으로 흡수 ----
 
-    private val rollFutures = FuturesSeries(
-        listOf(
-            FuturesBar(ny("2026-11-12", "16:00"), 200.0, 200.0),
-            FuturesBar(ny("2026-11-12", "16:05"), 200.0, 201.0),
-            FuturesBar(ny("2026-11-12", "16:10"), 201.0, 202.0),
-            // 정비 공백 뒤 새 계약: 시가 204로 계단
-            FuturesBar(ny("2026-11-12", "18:00"), 204.0, 205.0),
-            FuturesBar(ny("2026-11-12", "18:05"), 205.0, 206.0),
-        ),
-        "E-Mini S&P 500 Mar 27",
-    )
-    private val rollSpot = SpotSeries(spotBars("2026-11-12", "15:50", "16:00") { 100.0 }, listOf(session("2026-11-12")))
-
-    @Test fun rollover_withoutRollKeepsStep() {
-        val chart = combine24h(rollSpot, rollFutures, ny("2026-11-12", "18:10"))!!
-        assertEquals(listOf(100.5, 101.0, 102.5, 103.0), chart.values.takeLast(4))
+    @Test fun rollover_inSessionSwitchIsAbsorbedByCloseBase() {
+        // 실제 9월 교체처럼 정규장 중(11:30)에 선물이 새 계약(+1%)으로 바뀌어도, 기준이 장 마감 짝이라 장외 값에 계단이 없다
+        val spot = SpotSeries(spotBars("2026-11-12", "09:30", "16:00") { 100.0 }, listOf(session("2026-11-12")))
+        val futures = FuturesSeries(
+            futuresBars("2026-11-12", "09:00", "11:25") { 200.0 } + futuresBars("2026-11-12", "11:30", "16:55") { 202.0 },
+        )
+        val chart = combine24h(spot, futures, ny("2026-11-12", "17:00"))!!
+        val offHours = chart.values.filterIndexed { i, _ -> chart.converted[i] && chart.times[i] > ny("2026-11-12", "16:00") }
+        assertEquals(List(11) { 100.0 }, offHours)
     }
 
-    @Test fun rollover_rescalesFcAtGapSoSeamIsContinuous() {
-        val rollAt = ny("2026-11-12", "18:08")
-        val chart = combine24h(rollSpot, rollFutures, ny("2026-11-12", "18:10"), rollAt)!!
-        // Fc = 200 × 204 / 202. 18:00 시가 기준 값은 공백 앞 마지막 값(101.0)과 같다
-        assertEquals(listOf(100.5, 101.0, 101.5, 101.99), chart.values.takeLast(4))
-        assertEquals(100.0 * 204 / (200.0 * 204 / 202), 101.0, 1e-9)
-        assertEquals(rollAt, chart.roll_at)
-    }
-
-    @Test fun rollover_gapAfterDetectionIsNotRescaled() {
-        val chart = combine24h(rollSpot, rollFutures, ny("2026-11-12", "18:10"), rollAt = ny("2026-11-12", "17:30"))!!
-        assertEquals(102.5, chart.values[chart.values.size - 2], 0.0)
-    }
-
-    @Test fun rollAtFor_detectsContractChangeAndKeepsForAWeek() {
-        val now = ny("2026-12-14", "10:00")
-        val before = CombinedChart(contract = "E-Mini S&P 500 Dec 26")
-        assertNull(rollAtFor(null, "E-Mini S&P 500 Mar 27", now))
-        assertNull(rollAtFor(before, null, now))
-        assertNull(rollAtFor(before, "E-Mini S&P 500 Dec 26", now))
-        assertEquals(now, rollAtFor(before, "E-Mini S&P 500 Mar 27", now))
-        val rolled = CombinedChart(contract = "E-Mini S&P 500 Mar 27", roll_at = now)
-        assertEquals(now, rollAtFor(rolled, "E-Mini S&P 500 Mar 27", now + 3 * 86400))
-        assertNull(rollAtFor(rolled, "E-Mini S&P 500 Mar 27", now + 7 * 86400))
+    @Test fun rollover_maintenanceGapMoveIsKept() {
+        // 공백 앞뒤의 실제 변동은 지우지 않는다(보정 없음)
+        val spot = SpotSeries(spotBars("2026-11-12", "15:50", "16:00") { 100.0 }, listOf(session("2026-11-12")))
+        val futures = FuturesSeries(
+            listOf(
+                FuturesBar(ny("2026-11-12", "15:55"), 200.0, 200.0),
+                FuturesBar(ny("2026-11-12", "16:05"), 200.0, 202.0),
+                FuturesBar(ny("2026-11-12", "18:00"), 204.0, 205.0),
+            ),
+        )
+        assertEquals(listOf(101.0, 102.5), combine24h(spot, futures, ny("2026-11-12", "18:10"))!!.values.takeLast(2))
     }
 
     // ---- 화면용 ----

@@ -168,6 +168,21 @@ class SettingsTest {
         assertTrue(default === migrateSettings(default))
     }
 
+    @Test fun migrate_onlyFuturesShownTurnsOnSp500AndNasdaq100() {
+        // 옛 설정에서 ES·NQ만 켜 두었으면 옮긴 뒤 켜진 지표가 0개가 된다. 그 자리를 대신하는 GSPC·NDX를 켠다.
+        val oldIds = listOf("KS11", "KQ11", "GSPC", "IXIC", "VIX", "KRW", "DXY", "TNX", "CL", "GC", "BTC")
+        val migrated = migrateSettings(WidgetSettings(order = listOf("ES", "NQ"), hidden = oldIds))
+        assertEquals(listOf("KS11", "KQ11", "VIX", "KRW", "DXY", "TNX", "CL", "GC", "BTC"), migrated.hidden)
+        assertEquals(listOf("GSPC", "NDX"), ids(visibleQuotes(builtIn, emptyList(), migrated)))
+        assertEquals(2, shownCount(builtInIds, migrated))
+    }
+
+    @Test fun migrate_shownCustomTickerKeepsEverythingElseHidden() {
+        val oldIds = listOf("KS11", "KQ11", "GSPC", "IXIC", "VIX", "KRW", "DXY", "TNX", "CL", "GC", "BTC")
+        val migrated = migrateSettings(WidgetSettings(hidden = oldIds, custom = listOf(aapl)))
+        assertEquals(listOf("T:AAPL"), ids(visibleQuotes(builtIn, emptyList(), migrated)))
+    }
+
     @Test fun migrate_bothOldAndNewIdKeepsFirst() {
         assertEquals(listOf("NDX", "GSPC"), migrateSettings(WidgetSettings(order = listOf("NDX", "GSPC", "IXIC"))).order)
     }

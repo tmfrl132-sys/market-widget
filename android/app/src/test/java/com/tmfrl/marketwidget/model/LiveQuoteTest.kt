@@ -547,22 +547,24 @@ class LiveQuoteTest {
         assertNull(parseSpotSeries("""{"chart": {"result": null}}"""))
     }
 
-    @Test fun futuresSeries_readsOpenCloseAndContract_skipsEmptyBars() {
+    @Test fun futuresSeries_readsOpenClose_skipsEmptyBars() {
         val futures = parseFuturesSeries(resource("yahoo_5m_5d_es_20261113.json"))!!
-        assertEquals("E-Mini S&P 500 Dec 26", futures.contract)
         assertTrue(futures.bars.all { it.open != null })
         assertEquals(1794578107L, futures.bars.last().time)
+        // 장 마감 짝에 쓰는 15:55 봉(종가 = 16:00 가격)과 16:00 봉(시가 = 16:00 가격)
+        val thuClose = LocalDateTime.of(2026, 11, 12, 16, 0).atZone(NEW_YORK).toEpochSecond()
+        assertEquals(7616.25, futures.bars.single { it.time == thuClose - 300 }.close, 0.0)
+        assertEquals(7616.25, futures.bars.single { it.time == thuClose }.open!!, 0.0)
         // 응답에 빈 봉(null)이 있어도 건너뛴다
         val text = resource("yahoo_5m_5d_es_20261113.json")
         assertTrue(text.contains("null"))
-        assertEquals("Nasdaq 100 Dec 26", parseFuturesSeries(resource("yahoo_5m_5d_nq_20261113.json"))!!.contract)
     }
 
-    private fun combinedLive(contract: String = "E-Mini S&P 500 Dec 26") = LiveQuote(
+    private fun combinedLive() = LiveQuote(
         7592.4, -26.98, -0.35, 7619.38,
         combinedSource = CombinedSource(
             parseSpotSeries(resource("yahoo_5m_5d_gspc_20261113.json"))!!,
-            parseFuturesSeries(resource("yahoo_5m_5d_es_20261113.json"))!!.copy(contract = contract),
+            parseFuturesSeries(resource("yahoo_5m_5d_es_20261113.json"))!!,
         ),
     )
 
@@ -572,28 +574,25 @@ class LiveQuoteTest {
         val data = MarketData("old", listOf(quote("GSPC", 7600.0), quote("KS11", 100.0)), emptyList())
         val merged = applyLiveQuotes(data, mapOf("GSPC" to combinedLive(), "KS11" to LiveQuote(95.0, -5.0, -5.0, 100.0)), realUpdatedAt).quotes
         val combined = merged[0].combined!!
-        assertEquals(7626.05, combined.price, 0.0)
+        assertEquals(7624.8, combined.price, 0.0)
         assertEquals(7592.4, combined.baseline, 0.0)
         // 카드 숫자는 현물 시세 그대로다(장외에는 차트 현재값과 다르다)
         assertEquals(7592.4, merged[0].price!!, 0.0)
-        assertNull(combined.roll_at)
         assertNull(merged[1].combined)
     }
 
     @Test fun apply_withoutFuturesClearsPreviousCombined() {
-        val old = quote("GSPC", 7600.0).copy(combined = CombinedChart(values = listOf(1.0, 2.0), contract = "E-Mini S&P 500 Dec 26"))
+        val old = quote("GSPC", 7600.0).copy(combined = CombinedChart(values = listOf(1.0, 2.0)))
         val merged = applyLiveQuotes(MarketData("old", listOf(old), emptyList()), mapOf("GSPC" to LiveQuote(7592.4, -26.98, -0.35, 7619.38)), realUpdatedAt)
         assertNull(merged.quotes[0].combined)
     }
 
-    @Test fun apply_contractChangeFromPreviousCacheSetsRollAt() {
-        val previous = MarketData("old", listOf(quote("GSPC", 7600.0).copy(combined = CombinedChart(contract = "E-Mini S&P 500 Sep 26"))), emptyList())
-        // data.json에서 새로 받은 기본 데이터에는 combined가 없다. 지난 계약 이름은 직전 캐시에서 찾는다.
-        val fresh = MarketData("new", listOf(quote("GSPC", 7600.0)), emptyList())
-        val merged = applyLiveQuotes(fresh, mapOf("GSPC" to combinedLive()), realUpdatedAt, previous)
-        assertEquals(1794578704L, merged.quotes[0].combined!!.roll_at)
-        val same = applyLiveQuotes(fresh, mapOf("GSPC" to combinedLive("E-Mini S&P 500 Sep 26")), realUpdatedAt, previous)
-        assertNull(same.quotes[0].combined!!.roll_at)
+    @Test fun cacheWithRetiredRollFieldsStillParses() {
+        // v1.1 개발 중 캐시에 있던 contract·roll_at은 지웠다. 남아 있어도 무시하고 읽는다.
+        val text = """{"updated_at": "x", "quotes": [{"id": "GSPC", "name": "S&P500", "price": 1.0, "change": 0.0, "change_pct": 0.0,
+            "combined": {"times": [1, 2], "values": [1.0, 2.0], "converted": [false, true], "start": 0, "end": 10, "baseline": 1.0,
+            "contract": "E-Mini S&P 500 Dec 26", "roll_at": 5}}], "events": []}"""
+        assertEquals(listOf(1.0, 2.0), parseMarketData(text).quotes[0].combined!!.values)
     }
 
     @Test fun apply_unreadableUpdatedAtSkipsCombined() {

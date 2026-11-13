@@ -88,10 +88,10 @@ class RepositoryTest {
         """{"updated_at": "$time", "quotes": [{"id": "GSPC", "name": "S&P500", "price": 7600.0,
            "change": 1.0, "change_pct": 0.01, "daily": [7600.0]}], "events": []}"""
 
-    @Test fun refresh_combinedUsesPreviousCacheContractAndDropsWhenFuturesMissing() = runTest {
+    @Test fun refresh_combinedComputedAndCachedThenDroppedWhenFuturesMissing() = runTest {
         val cache = tmp.root.resolve("data.json")
         val old = parseMarketData(gspc("2026-11-13T22:00:00+09:00"))
-        cache.writeText(encodeMarketData(old.copy(quotes = old.quotes.map { it.copy(combined = CombinedChart(contract = "E-Mini S&P 500 Sep 26")) })))
+        cache.writeText(encodeMarketData(old.copy(quotes = old.quotes.map { it.copy(combined = CombinedChart(values = listOf(1.0, 2.0))) })))
         val source = CombinedSource(
             parseSpotSeries(resource("yahoo_5m_5d_gspc_20261113.json"))!!,
             parseFuturesSeries(resource("yahoo_5m_5d_es_20261113.json"))!!,
@@ -102,10 +102,9 @@ class RepositoryTest {
             { mapOf("GSPC" to LiveQuote(7592.4, -26.98, -0.35, 7619.38, combinedSource = source.takeIf { withFutures })) },
             { "2026-11-13T23:05:04+09:00" },
         ) { gspc("2026-11-13T23:00:00+09:00") }
-        // data.json에는 combined가 없지만 직전 캐시의 계약 이름(Sep 26)과 비교해 교체를 알아챈다
+        // 매 갱신 같은 응답에서 새로 계산한다(지난 캐시 값을 쓰지 않는다)
         val first = repo.refresh()!!.quotes.single().combined!!
-        assertEquals("E-Mini S&P 500 Dec 26", first.contract)
-        assertEquals(1794578704L, first.roll_at)
+        assertEquals(7624.8, first.price, 0.0)
         assertEquals(first, repo.cached()!!.quotes.single().combined)
         // 선물을 못 받은 갱신에서는 낡은 합친 차트를 지운다
         withFutures = false
