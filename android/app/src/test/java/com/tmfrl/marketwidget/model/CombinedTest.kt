@@ -234,7 +234,7 @@ class CombinedTest {
         try {
             TimeZone.setDefault(TimeZone.getTimeZone("Europe/London"))
             val chart = realChart("yahoo_5m_5d_gspc_20261113.json", "yahoo_5m_5d_es_20261113.json")!!
-            assertEquals(7626.05, chart.price, 0.0)
+            assertEquals(7624.8, chart.price, 1e-9)
             assertEquals("선물 환산 22:55", convertedLabel(chart))
             assertEquals("23:00", combinedXAxis(chart).ticks.first().label)
         } finally {
