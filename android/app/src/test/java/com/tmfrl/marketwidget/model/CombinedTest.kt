@@ -125,49 +125,52 @@ class CombinedTest {
 
     @Test fun real_sp500_preOpenFriday() {
         val chart = realChart("yahoo_5m_5d_gspc_20261113.json", "yahoo_5m_5d_es_20261113.json")!!
-        assertEquals(275, chart.values.size)
-        assertEquals(1794492007L, chart.start)
-        assertEquals(1794578407L, chart.end)
-        assertEquals(1794492300L, chart.times.first())
-        assertEquals(7567.5, chart.values.first(), 0.0)
+        // v1.3 창: 금 09:05 뉴욕 이하 가장 최근 09:30 = 목 09:30(서울 23:30)부터 고정 24시간
+        assertEquals(270, chart.values.size)
+        assertEquals(ny("2026-11-12", "09:30"), chart.start)
+        assertEquals(1794493800L, chart.start)
+        assertEquals(1794580200L, chart.end)
+        assertEquals(1794493800L, chart.times.first())
+        assertEquals(7576.3, chart.values.first(), 0.0)
         assertEquals(1794578107L, chart.times.last())
         // 기준 짝: 현물 16:00 공식 종가 7,592.40 ↔ 선물 15:55 봉 종가 7,616.25(16:00 가격)
         assertEquals(7624.8, chart.price, 0.0)
         assertEquals(7592.4, chart.baseline, 0.0)
         assertEquals(32.4, chart.change, 0.0)
         assertEquals(0.43, chart.change_pct, 0.0)
-        assertEquals(7558.28, chart.low, 0.0)
+        assertEquals(7576.3, chart.low, 0.0)
         assertEquals(7649.21, chart.high, 0.0)
-        assertEquals(196, chart.converted.count { it })
-        assertEquals(listOf(95), chart.breaks)
+        assertEquals(191, chart.converted.count { it })
+        assertEquals(listOf(90), chart.breaks)
         assertEquals(listOf(TradingSpan(1794493800L, 1794517200L)), chart.sessions)
-        // 이음매: 09:25 환산 → 09:30 현물, 16:00 현물 → 16:05 환산
-        assertEquals(7560.03, valueAt(chart, ny("2026-11-12", "09:25")), 0.0)
+        // 목 09:25 환산 점은 창 밖이다. 이음매: 16:00 현물 → 16:05 환산
+        assertFalse(ny("2026-11-12", "09:25") in chart.times)
         assertEquals(7576.3, valueAt(chart, ny("2026-11-12", "09:30")), 0.0)
         assertEquals(7592.4, valueAt(chart, ny("2026-11-12", "16:00")), 0.0)
         assertEquals(7596.64, valueAt(chart, ny("2026-11-12", "16:05")), 0.0)
         assertEquals(7597.88, valueAt(chart, ny("2026-11-12", "16:55")), 0.0)
         assertEquals(7603.37, valueAt(chart, ny("2026-11-12", "18:00")), 0.0)
         // 정비 공백(16:55~18:00)에서 끊는다
-        assertEquals(ny("2026-11-12", "16:55"), chart.times[94])
-        assertEquals(ny("2026-11-12", "18:00"), chart.times[95])
+        assertEquals(ny("2026-11-12", "16:55"), chart.times[89])
+        assertEquals(ny("2026-11-12", "18:00"), chart.times[90])
         assertEquals("선물 환산 22:55", convertedLabel(chart))
+        assertEquals("23:30~", combinedStartLabel(chart))
     }
 
     @Test fun real_nasdaq100_preOpenFriday() {
         val chart = realChart("yahoo_5m_5d_ndx_20261113.json", "yahoo_5m_5d_nq_20261113.json")!!
-        assertEquals(275, chart.values.size)
-        assertEquals(1794492300L, chart.times.first())
-        assertEquals(27994.73, chart.values.first(), 0.0)
+        assertEquals(270, chart.values.size)
+        assertEquals(1794493800L, chart.times.first())
+        assertEquals(28103.21, chart.values.first(), 0.0)
         // 기준 짝: 현물 16:00 28,289.19 ↔ 선물 15:55 봉 종가 28,388.25
         assertEquals(28333.03, chart.price, 0.0)
         assertEquals(28289.19, chart.baseline, 0.0)
         assertEquals(43.85, chart.change, 0.0)
         assertEquals(0.15, chart.change_pct, 0.0)
-        assertEquals(27953.39, chart.low, 0.0)
+        assertEquals(28103.21, chart.low, 0.0)
         assertEquals(28525.78, chart.high, 0.0)
-        assertEquals(listOf(95), chart.breaks)
-        assertEquals(27957.37, valueAt(chart, ny("2026-11-12", "09:25")), 0.0)
+        assertEquals(listOf(90), chart.breaks)
+        assertFalse(ny("2026-11-12", "09:25") in chart.times)
         assertEquals(28103.21, valueAt(chart, ny("2026-11-12", "09:30")), 0.0)
         assertEquals(28325.31, valueAt(chart, ny("2026-11-12", "16:05")), 0.0)
         assertEquals(28347.48, valueAt(chart, ny("2026-11-12", "18:00")), 0.0)
@@ -198,32 +201,38 @@ class CombinedTest {
             futures.copy(bars = futures.bars.filter { it.time <= now - 300 }),
             now,
         )!!
-        assertEquals(274, chart.values.size)
-        assertEquals(1794416400L, chart.start)
-        assertEquals(1794502800L, chart.end)
-        assertEquals(7627.26, chart.values.first(), 0.0)
+        // v1.3: 정규장이 열린 목 09:30부터 다시 채운다(09:30~11:55 현물 30개). 오른쪽은 비어 있다.
+        assertEquals(30, chart.values.size)
+        assertEquals(1794493800L, chart.start)
+        assertEquals(1794580200L, chart.end)
+        assertEquals(7576.3, chart.values.first(), 0.0)
         assertEquals(7633.37, chart.price, 0.0)
         assertFalse(chart.lastConverted)
         assertNull(convertedLabel(chart))
         assertEquals(7619.38, chart.baseline, 0.0)
         assertEquals(13.99, chart.change, 0.0)
         assertEquals(0.18, chart.change_pct, 0.0)
-        assertEquals(7555.04, chart.low, 0.0)
+        assertEquals(7576.3, chart.low, 0.0)
         assertEquals(7649.21, chart.high, 0.0)
-        assertEquals(listOf(59), chart.breaks)
-        assertEquals(listOf(TradingSpan(1794416400L, 1794430800L), TradingSpan(1794493800L, 1794502800L)), chart.sessions)
+        assertEquals(emptyList<Int>(), chart.breaks)
+        // 정규장 띠는 창 안의 정해진 정규장 전체(09:30~16:00)다
+        assertEquals(listOf(TradingSpan(1794493800L, 1794517200L)), chart.sessions)
+        // 전일(수) 16:00 마감은 창 밖이라 장마감 표시가 없다
+        assertEquals(0L, chart.close_time)
+        assertNull(combinedCloseMark(chart))
     }
 
     @Test fun real_xAxisEveryFourHoursSeoulAndSessionBand() {
         val chart = realChart("yahoo_5m_5d_gspc_20261113.json", "yahoo_5m_5d_es_20261113.json")!!
         val axis = combinedXAxis(chart)
-        assertEquals(listOf("23:00", "04:00", "08:00", "12:00", "16:00", "20:00", "23:00"), axis.ticks.map { it.label })
+        // 창이 서울 23:30~다음 날 23:30이라 양 끝이 23:30, 00:00은 시작에 너무 가까워 뺀다
+        assertEquals(listOf("23:30", "04:00", "08:00", "12:00", "16:00", "20:00", "23:30"), axis.ticks.map { it.label })
         assertEquals(chart.values.size, axis.positions!!.size)
-        assertEquals(0.00340f, axis.positions!!.first(), 1e-4f)
-        assertEquals(0.99653f, axis.positions!!.last(), 1e-4f)
+        assertEquals(0f, axis.positions!!.first(), 1e-6f)
+        assertEquals(0.975775f, axis.positions!!.last(), 1e-4f)
         val band = combinedBands(chart).single()
-        assertEquals(0.020752f, band.start, 1e-4f)
-        assertEquals(0.291586f, band.endInclusive, 1e-4f)
+        assertEquals(0f, band.start, 1e-6f)
+        assertEquals(0.270833f, band.endInclusive, 1e-4f)
         // 정규장 띠는 서울 23:30~06:00(11월, 미국 표준시)
         assertEquals("11-12 23:30", seoul(chart.sessions.single().start))
         assertEquals("11-13 06:00", seoul(chart.sessions.single().end))
@@ -236,7 +245,8 @@ class CombinedTest {
             val chart = realChart("yahoo_5m_5d_gspc_20261113.json", "yahoo_5m_5d_es_20261113.json")!!
             assertEquals(7624.8, chart.price, 1e-9)
             assertEquals("선물 환산 22:55", convertedLabel(chart))
-            assertEquals("23:00", combinedXAxis(chart).ticks.first().label)
+            assertEquals("23:30", combinedXAxis(chart).ticks.first().label)
+            assertEquals("23:30~", combinedStartLabel(chart))
         } finally {
             TimeZone.setDefault(original)
         }
@@ -254,7 +264,7 @@ class CombinedTest {
         assertEquals(listOf("03-06 23:30" to "03-07 06:00", "03-09 22:30" to "03-10 05:00"), sessions.map { seoul(it.start) to seoul(it.end) })
     }
 
-    @Test fun dstEnd_weekendConvertsWithFridayBaseAndWindowIs24Hours() {
+    @Test fun dstEnd_weekendConvertsWithFridayBase_openWithOneSpotBarUsesPreviousWindow() {
         // 장 시간 목록이 없어 뉴욕 09:30~16:00으로 계산한다. 금요일은 서머타임(EDT), 월요일은 표준시(EST)다.
         val spot = SpotSeries(
             spotBars("2026-10-30", "15:50", "15:55") { 100.0 } + SpotBar(ny("2026-11-02", "09:30"), 103.5),
@@ -271,15 +281,18 @@ class CombinedTest {
             ),
         )
         val chart = combine24h(spot, futures, now = ny("2026-11-02", "09:37"))!!
-        assertEquals(ny("2026-11-02", "09:35"), chart.end)
-        assertEquals(chart.end - 86400, chart.start)
+        // 월 09:30 창에는 현물 09:30 봉 하나뿐이라 직전 창(일 09:30 표준시 ~ 월 09:30)을 쓴다
+        assertEquals(ny("2026-11-01", "09:30"), chart.start)
+        assertEquals(chart.start + 86400, chart.end)
+        assertEquals(ny("2026-11-02", "09:30"), chart.end)
         assertEquals(listOf(ny("2026-11-01", "18:00"), ny("2026-11-01", "18:05"), ny("2026-11-02", "09:25"), ny("2026-11-02", "09:30")), chart.times)
         assertEquals(listOf(102.0, 102.0, 102.97, 103.5), chart.values)
         assertEquals(listOf(true, true, true, false), chart.converted)
         assertEquals(listOf(2), chart.breaks)
         // 월요일 장중이라 기준선은 금요일 공식 종가(previousClose)
         assertEquals(100.2, chart.baseline, 0.0)
-        assertEquals(listOf("11-02 23:30" to "11-02 23:35"), chart.sessions.map { seoul(it.start) to seoul(it.end) })
+        // 월요일 정규장은 창 끝(월 09:30)에서 시작해 창 안의 띠가 없다
+        assertEquals(emptyList<TradingSpan>(), chart.sessions)
         // previousClose가 없으면 금요일 마지막 봉
         assertEquals(100.0, combine24h(spot.copy(previousClose = null), futures, ny("2026-11-02", "09:37"))!!.baseline, 0.0)
     }
@@ -316,7 +329,7 @@ class CombinedTest {
 
     // ---- 주말 ----
 
-    @Test fun weekendWindowEndsAtFridayLastBar() {
+    @Test fun weekendWindowStartsAtFridayOpen() {
         val spot = SpotSeries(
             spotBars("2026-11-12", "15:55", "16:00") { 99.0 } + spotBars("2026-11-13", "09:30", "16:00") { 100.0 },
             listOf(session("2026-11-12"), session("2026-11-13")),
@@ -328,11 +341,13 @@ class CombinedTest {
                 futuresBars("2026-11-13", "00:05", "16:55") { if (it <= 197) 200.0 else 202.0 },
         )
         val chart = combine24h(spot, futures, now = ny("2026-11-14", "12:00"))!!
-        assertEquals(ny("2026-11-13", "17:00"), chart.end)
-        assertEquals(ny("2026-11-12", "17:00"), chart.start)
-        // 목 16:55(창 밖)는 빠지고 목 18:00부터
-        assertEquals(ny("2026-11-12", "18:00"), chart.times.first())
+        // asOf = 금 17:00(마지막 점 16:55 + 5분). 그 이하 가장 최근 09:30 = 금 09:30부터 고정 24시간
+        assertEquals(ny("2026-11-13", "09:30"), chart.start)
+        assertEquals(ny("2026-11-14", "09:30"), chart.end)
+        // 목요일 장외와 금요일 개장 전 환산은 창 밖이고 금 09:30 현물부터
+        assertEquals(ny("2026-11-13", "09:30"), chart.times.first())
         assertEquals(100.0, chart.values.first(), 0.0)
+        assertEquals(90, chart.values.size)
         assertEquals(ny("2026-11-13", "16:55"), chart.times.last())
         // 장 마감 뒤라 기준선은 금요일 종가, 마지막 점은 금요일 기준 환산값(100 × 202 / 금 15:55 선물 봉 종가 200)
         assertEquals(100.0, chart.baseline, 0.0)
@@ -377,8 +392,10 @@ class CombinedTest {
                 futuresBars("2026-11-27", "13:05", "13:10") { 210.0 },
         )
         val chart = combine24h(spot, futures, now = ny("2026-11-27", "13:20"))!!
-        assertEquals(ny("2026-11-27", "13:15"), chart.end)
-        assertEquals(103.2, valueAt(chart, ny("2026-11-27", "09:25")), 0.0)
+        assertEquals(ny("2026-11-27", "09:30"), chart.start)
+        assertEquals(ny("2026-11-28", "09:30"), chart.end)
+        // 개장 전 09:25 환산 점은 창 밖이다
+        assertEquals(ny("2026-11-27", "09:30"), chart.times.first())
         assertEquals(104.1, valueAt(chart, ny("2026-11-27", "09:30")), 0.0)
         // 13:00 마감 뒤 13:05는 금요일 기준(104.1 × 210 / 208.2)
         assertEquals(105.0, valueAt(chart, ny("2026-11-27", "13:05")), 0.0)
@@ -436,7 +453,9 @@ class CombinedTest {
 
     @Test fun baseline_justAfterCloseIsTodaysClose() {
         val chart = combine24h(wedThuSpot, wedThuFutures.copy(bars = wedThuFutures.bars.filter { it.time <= ny("2026-11-12", "16:00") }), ny("2026-11-12", "16:02"))!!
-        assertEquals(ny("2026-11-12", "16:02"), chart.end)
+        // 창은 목 09:30부터 고정 24시간. 기준선은 asOf(16:02)로 정해 방금 끝난 목요일 종가다.
+        assertEquals(ny("2026-11-12", "09:30"), chart.start)
+        assertEquals(ny("2026-11-13", "09:30"), chart.end)
         assertEquals(7592.4, chart.baseline, 0.0)
         assertEquals(0.0, chart.change, 0.0)
         assertFalse(chart.lastConverted)
@@ -500,7 +519,8 @@ class CombinedTest {
         assertEquals("마감 후 ▲0.50%", formatAfterCloseBadge(chart))
         assertTrue(formatCloseSummary(chart), formatCloseSummary(chart).startsWith("종가 7,592"))
         assertTrue(formatCloseSummary(chart).endsWith(" ▼0.35%"))
-        assertEquals(sessionPosition(chart.close_time, chart.start, chart.end), combinedCloseLine(chart)!!, 0f)
+        // 장마감 표시: 16:00 종가 봉 위 점과 "장마감 7,592.4"(formatPrice)
+        assertEquals(chart.times.indexOf(ny("2026-11-12", "16:00")) to "장마감 ${formatPrice(7592.4)}", combinedCloseMark(chart))
         // 마감 지점에서 끊기지 않는다(16:00 종가 봉과 16:05 환산 봉은 5분 간격)
         assertTrue(chart.breaks.none { chart.times[it] == ny("2026-11-12", "16:05") })
     }
@@ -511,10 +531,10 @@ class CombinedTest {
         val chart = combine24h(spot, wedThuFutures.copy(bars = wedThuFutures.bars.filter { it.time <= now }), now)!!
         assertFalse(chart.afterClose)
         assertEquals(7619.38, chart.prev_close, 0.0)
-        // 장마감 세로선은 어제(수요일) 16:00, 값은 그 공식 종가
-        assertEquals(ny("2026-11-11", "16:00"), chart.close_time)
+        // v1.3: 어제(수요일) 16:00 마감은 창(목 09:30~) 밖이라 장마감 표시가 없다. 종가 값은 기준선으로 남는다.
+        assertEquals(0L, chart.close_time)
         assertEquals(7619.38, chart.close_price, 0.0)
-        assertNotNull(combinedCloseLine(chart))
+        assertNull(combinedCloseMark(chart))
         val gspc = Quote("GSPC", "S&P500", 7590.0, 0.0, 0.0, combined = chart)
         assertNull(afterCloseChartFor(gspc))
     }
@@ -529,8 +549,125 @@ class CombinedTest {
         // 옛 캐시(종가 없음)는 마감 후 표시를 하지 않고, 장마감 선도 그리지 않는다
         val old = chart.copy(prev_close = 0.0, close_time = 0, close_price = 0.0)
         assertNull(afterCloseChartFor(gspc.copy(combined = old)))
-        assertNull(combinedCloseLine(old))
+        assertNull(combinedCloseMark(old))
         assertNull(old.closeChangePct)
+    }
+
+    // ---- v1.3: 뉴욕 09:30부터 고정 24시간 창 ----
+
+    @Test fun latestNewYorkOpen_anyWeekdayAndDst() {
+        assertEquals(ny("2026-11-12", "09:30"), latestNewYorkOpen(ny("2026-11-13", "09:05")))
+        assertEquals(ny("2026-11-13", "09:30"), latestNewYorkOpen(ny("2026-11-13", "09:30")))
+        // 일요일도 09:30이다(요일 무관)
+        assertEquals(ny("2026-11-15", "09:30"), latestNewYorkOpen(ny("2026-11-15", "20:00")))
+        assertEquals("11-15 23:30", seoul(latestNewYorkOpen(ny("2026-11-15", "20:00"))))
+        // 서머타임(EDT)에는 서울 22:30
+        assertEquals("10-29 22:30", seoul(latestNewYorkOpen(ny("2026-10-30", "05:00"))))
+    }
+
+    /** 목 정규장(100), 목 장외 선물(기준 200 → 202), 금 개장. 기대값은 파이썬 계산(scratch combined.py)과 같다. */
+    private val resetSpot = spotBars("2026-11-12", "09:30", "16:00") { 100.0 }
+    private val resetSpans = listOf(session("2026-11-12"), session("2026-11-13"))
+    private val resetFutures =
+        futuresBars("2026-11-12", "15:55", "16:55") { 200.0 } +
+            futuresBars("2026-11-12", "18:00", "23:55") { 202.0 } +
+            futuresBars("2026-11-13", "00:05", "09:40") { 202.0 }
+
+    private fun resetChart(now: String, friday: List<SpotBar>): CombinedChart? = combine24h(
+        SpotSeries(resetSpot + friday, resetSpans, previousClose = 99.0),
+        FuturesSeries(resetFutures.filter { it.time <= ny("2026-11-13", now) - 60 }),
+        ny("2026-11-13", now),
+    )
+
+    @Test fun openReset_beforeTwoSpotBarsKeepsPreviousWindow() {
+        // 금 09:31: 금요일 현물 봉이 아직 없어 새 창(금 09:30~)에 점이 1개 → 직전 창(목 09:30~금 09:30)
+        val before = resetChart("09:31", emptyList())!!
+        assertEquals(ny("2026-11-12", "09:30"), before.start)
+        assertEquals(ny("2026-11-13", "09:30"), before.end)
+        assertEquals(276, before.values.size)
+        assertEquals(ny("2026-11-13", "09:30"), before.times.last())
+        assertEquals(1.0f, combinedXAxis(before).positions!!.last(), 1e-6f)
+        // 금 09:36: 현물 09:30 봉 하나 → 아직 직전 창, 마지막 점은 그 현물 봉
+        val one = resetChart("09:36", listOf(SpotBar(ny("2026-11-13", "09:30"), 101.0)))!!
+        assertEquals(ny("2026-11-12", "09:30"), one.start)
+        assertEquals(101.0, one.price, 0.0)
+        assertFalse(one.lastConverted)
+        assertEquals(99.0, one.baseline, 0.0)
+    }
+
+    @Test fun openReset_twoSpotBarsRestartFromLeftEdge() {
+        val chart = resetChart("09:41", listOf(SpotBar(ny("2026-11-13", "09:30"), 101.0), SpotBar(ny("2026-11-13", "09:35"), 101.5)))!!
+        assertEquals(ny("2026-11-13", "09:30"), chart.start)
+        assertEquals(ny("2026-11-14", "09:30"), chart.end)
+        assertEquals(listOf(101.0, 101.5), chart.values)
+        val positions = combinedXAxis(chart).positions!!
+        assertEquals(2, positions.size)
+        assertEquals(0f, positions[0], 1e-6f)
+        assertEquals(300f / 86400f, positions[1], 1e-6f)
+        // 기준선·등락은 그대로 asOf 기준(장중이라 전일 공식 종가 99)
+        assertEquals(99.0, chart.baseline, 0.0)
+        assertEquals(2.53, chart.change_pct, 0.0)
+        // 정규장 띠는 정해진 금 09:30~16:00 전체(오른쪽 빈 곳까지)
+        val band = combinedBands(chart).single()
+        assertEquals(0f, band.start, 1e-6f)
+        assertEquals(6.5f / 24f, band.endInclusive, 1e-6f)
+        assertEquals("23:30~", combinedStartLabel(chart))
+    }
+
+    private val fridaySpot = SpotSeries(spotBars("2026-11-13", "09:30", "16:00") { 100.0 }, listOf(session("2026-11-13")), previousClose = 99.0)
+    private val weekendFutures = futuresBars("2026-11-13", "15:55", "16:55") { 200.0 } + futuresBars("2026-11-15", "18:00", "19:55") { 204.0 }
+
+    @Test fun weekend_saturdaySeoulMorningShowsFridayFromOpen() {
+        // 토 10:00 서울 = 금 20:00 뉴욕. asOf = 금 17:00, 창 = 금 09:30~
+        val chart = combine24h(fridaySpot, FuturesSeries(weekendFutures.filter { it.time <= ny("2026-11-13", "16:55") }), ny("2026-11-13", "20:00"))!!
+        assertEquals(ny("2026-11-13", "09:30"), chart.start)
+        assertEquals(90, chart.values.size)
+        assertEquals(ny("2026-11-13", "16:55"), chart.times.last())
+        assertEquals("11-14 06:00", seoul(chart.close_time))
+    }
+
+    @Test fun weekend_mondaySeoulMorningShowsSundayFuturesOnly() {
+        // 월 10:00 서울 = 일 20:00 뉴욕. 창 = 일 09:30~, 일 18:00 이후 선물 환산만 보인다
+        val chart = combine24h(fridaySpot, FuturesSeries(weekendFutures), ny("2026-11-15", "20:00"))!!
+        assertEquals(ny("2026-11-15", "09:30"), chart.start)
+        assertEquals(ny("2026-11-16", "09:30"), chart.end)
+        assertEquals(24, chart.values.size)
+        assertEquals(ny("2026-11-15", "18:00"), chart.times.first())
+        assertTrue(chart.converted.all { it })
+        // 100 × 204 / 금 15:55 선물 봉 종가 200
+        assertEquals(102.0, chart.price, 0.0)
+        assertEquals(100.0, chart.baseline, 0.0)
+        assertEquals(emptyList<TradingSpan>(), chart.sessions)
+        // 금요일 마감은 창 밖
+        assertEquals(0L, chart.close_time)
+    }
+
+    @Test fun weekend_sundayFuturesFirstBarAloneIsNull() {
+        // 일 18:02: 새 창에 점 1개, 직전 창(토 09:30~일 09:30)은 비어 있다
+        val futures = FuturesSeries(weekendFutures.filter { it.time <= ny("2026-11-15", "18:00") })
+        assertNull(combine24h(fridaySpot, futures, ny("2026-11-15", "18:02")))
+    }
+
+    @Test fun dst_windowStartsAt2230Seoul() {
+        val spot = SpotSeries(spotBars("2026-10-29", "09:30", "16:00") { 100.0 }, previousClose = 99.0)
+        val chart = combine24h(spot, FuturesSeries(futuresBars("2026-10-29", "15:55", "16:55") { 200.0 }), ny("2026-10-29", "17:30"))!!
+        assertEquals("10-29 22:30", seoul(chart.start))
+        assertEquals(chart.start + 86400, chart.end)
+        assertEquals("22:30~", combinedStartLabel(chart))
+        assertEquals("22:30", combinedXAxis(chart).ticks.first().label)
+        assertEquals(listOf("10-29 22:30" to "10-30 05:00"), chart.sessions.map { seoul(it.start) to seoul(it.end) })
+    }
+
+    @Test fun closeMark_nearestPointAtOrBeforeCloseTime() {
+        // 마지막 현물 봉이 15:50이라 16:00 점이 없다 → 16:00 이하 가장 가까운 15:50 점
+        val spot = SpotSeries(spotBars("2026-11-12", "15:30", "15:50") { 100.0 }, listOf(session("2026-11-12")), previousClose = 99.0)
+        val chart = combine24h(spot, FuturesSeries(futuresBars("2026-11-12", "15:50", "16:30") { 200.0 }), ny("2026-11-12", "16:40"))!!
+        assertEquals(ny("2026-11-12", "16:00"), chart.close_time)
+        val mark = combinedCloseMark(chart)!!
+        assertEquals(ny("2026-11-12", "15:50"), chart.times[mark.first])
+        assertEquals("장마감 ${formatPrice(100.0)}", mark.second)
+        // close_time이 창 밖이면 없다
+        assertNull(combinedCloseMark(chart.copy(close_time = chart.end + 1)))
     }
 
     // ---- 화면용 ----

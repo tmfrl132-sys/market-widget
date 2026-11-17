@@ -1,6 +1,7 @@
 package com.tmfrl.marketwidget.ui
 
 import android.content.Context
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -20,6 +21,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -200,6 +202,12 @@ private class SettingsModel(
 
     fun reset() = change { resetOrder(it) }
 
+    /** 큰 차트의 고점 대비 낙폭(MDD) 표시. 그리기만 바뀌어 다시 받지 않는다. */
+    fun setShowDrawdown(show: Boolean) = change { it.copy(show_drawdown = show) }
+
+    /** 국내 개별 종목 NXT 시간 포함. 시세와 오늘 차트가 바뀌므로 바로 다시 받는다. */
+    fun setNxtHours(on: Boolean) = change(fetch = true) { it.copy(nxt_hours = on) }
+
     fun showMessage(text: String) {
         scope.launch { snackbar.showSnackbar(text) }
     }
@@ -308,11 +316,15 @@ fun SettingsScreen(lifecycle: Lifecycle, onAddWidget: () -> Unit) {
                 )
                 if (wide) {
                     Row(modifier = Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                        LazyColumn(modifier = Modifier.weight(1f)) { indicatorItems(model) }
+                        LazyColumn(modifier = Modifier.weight(1f)) {
+                            optionItems(model)
+                            indicatorItems(model)
+                        }
                         LazyColumn(modifier = Modifier.weight(1f)) { searchItems(model) }
                     }
                 } else {
                     LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                        optionItems(model)
                         indicatorItems(model)
                         item { Spacer(Modifier.height(24.dp)) }
                         searchItems(model)
@@ -326,6 +338,42 @@ fun SettingsScreen(lifecycle: Lifecycle, onAddWidget: () -> Unit) {
                 }
             }
             ConfirmDialogs(model)
+        }
+    }
+}
+
+/** 표시 설정(v1.3). 바로 저장하고 위젯을 다시 그린다. */
+private fun LazyListScope.optionItems(model: SettingsModel) {
+    item(key = "options") {
+        Text("표시", color = TEXT, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+        OptionRow(
+            label = "고점 대비 낙폭(MDD) 표시",
+            detail = "큰 차트의 낙폭 줄, 낙폭 차트, 최대 낙폭 구간",
+            checked = model.settings.show_drawdown,
+            onChange = { model.setShowDrawdown(it) },
+        )
+        OptionRow(
+            label = "국내주식 NXT 시간(08:00~20:00) 포함",
+            detail = "추가한 국내 종목에 넥스트레이드 프리·애프터마켓 시세 반영",
+            checked = model.settings.nxt_hours,
+            onChange = { model.setNxtHours(it) },
+        )
+        HorizontalDivider(color = TILE)
+        Spacer(Modifier.height(16.dp))
+    }
+}
+
+@Composable
+private fun OptionRow(label: String, detail: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().clickable { onChange(!checked) }.padding(vertical = 2.dp),
+    ) {
+        Checkbox(checked = checked, onCheckedChange = onChange)
+        Spacer(Modifier.width(4.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(label, color = TEXT, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(detail, color = SUBTLE, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }

@@ -32,7 +32,7 @@ const val COMBINED_GAP_SECONDS = 600L
 /** 장 마감 종가와 짝지을 선물 봉을 찾는 범위. 같은 시각 봉이 없을 때 앞뒤 5분 안에서 가장 가까운 봉을 쓴다. */
 private const val SAME_TIME_TOLERANCE = 300L
 
-/** 5분봉 길이. 마지막 점 뒤로 창 끝을 늘리는 길이이기도 하다. */
+/** 5분봉 길이. 마지막 점 뒤로 기준 시각(asOf)을 늘리는 길이이기도 하다. */
 private const val BAR_SECONDS = 300L
 
 private const val WINDOW_SECONDS = 24 * 3600L
@@ -59,7 +59,7 @@ data class CombinedSource(val spot: SpotSeries, val futures: FuturesSeries)
 /**
  * 합친 24시간 차트. 기기가 갱신 때 계산해 Quote.combined에 저장한다. 수집기는 보내지 않는다.
  * times·values·converted는 점마다 1:1이다. converted가 true면 선물 환산값, false면 현물 값이다.
- * breaks는 선을 끊는 점 위치(그 점 앞에서 끊는다). start·end는 창, sessions는 창 안의 정규장 구간이다.
+ * breaks는 선을 끊는 점 위치(그 점 앞에서 끊는다). start·end는 창(v1.3부터 뉴욕 09:30부터 고정 24시간), sessions는 창 안의 정규장 구간이다.
  * baseline은 기준선(직전에 끝난 정규장 종가), price는 마지막 점 값, change·change_pct는 기준선 대비, low·high는 창 안 최저·최고다.
  */
 @Serializable
@@ -79,7 +79,7 @@ data class CombinedChart(
     val high: Double = 0.0,
     // v1.2. 옛 캐시에는 없어 0이고, 0이면 해당 선·문구를 그리지 않는다.
     val prev_close: Double = 0.0, // 가장 최근 정규장의 전일종가(가로 점선)
-    val close_time: Long = 0, // 창 안에서 가장 최근에 끝난 정규장의 마감 시각(세로 점선)
+    val close_time: Long = 0, // 창 안에서 가장 최근에 끝난 정규장의 마감 시각(v1.3부터 선 위 장마감 점)
     val close_price: Double = 0.0, // 그 정규장의 종가(= 장외 환산의 기준)
 ) {
     /** 마지막 점이 선물 환산값인지. */
@@ -130,14 +130,28 @@ private fun futuresPriceAtClose(bars: List<FuturesBar>, last: SpotBar, sessionEn
 
 private class CombinedPoint(val time: Long, val value: Double, val converted: Boolean)
 
+/** 시각 t 이하에서 가장 최근의 뉴욕 09:30(요일 무관). 서울로는 23:30, 서머타임엔 22:30이다. */
+fun latestNewYorkOpen(t: Long): Long {
+    val day = Instant.ofEpochSecond(t).atZone(NEW_YORK).toLocalDate()
+    val today = day.atTime(REGULAR_OPEN).atZone(NEW_YORK).toEpochSecond()
+    return if (today <= t) today else day.minusDays(1).atTime(REGULAR_OPEN).atZone(NEW_YORK).toEpochSecond()
+}
+
+/** 창 시작(뉴욕 09:30)의 바로 앞 뉴욕 날짜 09:30. 서머타임이 바뀌는 주말만 빼면 24시간 전이다. */
+private fun previousNewYorkOpen(start: Long): Long =
+    Instant.ofEpochSecond(start).atZone(NEW_YORK).toLocalDate().minusDays(1).atTime(REGULAR_OPEN).atZone(NEW_YORK).toEpochSecond()
+
 /**
  * 합친 24시간 차트를 계산한다. 점이 2개 미만이거나 기준선을 정할 수 없으면 null.
  *
  * - 정규장 안([개장, 끝]): 현물 종가를 쓰고 그 시간의 선물 봉은 버린다.
  * - 장외 선물 봉 t: t보다 먼저 끝난 가장 최근 정규장의 (Sc, Fc)로 Sc × F(t) / Fc. Fc를 못 찾은 정규장 뒤 장외는 그리지 않는다.
  *   F(t)는 봉 종가(t + 5분 가격)이지만 점은 현물 봉처럼 봉 시각 t에 놓는다(현물 봉 종가도 t + 5분 가격이다).
- * - 창: 끝 = min(now, 마지막 점 + 5분), 시작 = 끝 - 24시간.
- * - 기준선: 끝 이전에 끝난 가장 최근 정규장의 종가. 그 정규장이 자료에서 마지막 바로 앞 정규장이면(지금 장중)
+ * - 기준 시각 asOf = min(now, 마지막 점 + 5분).
+ * - 창(v1.3, 고정): 시작 = asOf 이하에서 가장 최근의 뉴욕 09:30, 끝 = 시작 + 24시간. 점은 [시작, min(asOf, 끝)] 안의 것만이라
+ *   정규장이 열리면 왼쪽 끝부터 다시 채워지고 오른쪽은 비어 있다. 새 창에 점이 2개 미만이면(개장 직후 첫 현물 봉 전,
+ *   주말) 바로 앞 뉴욕 날짜 09:30부터의 창을 쓰고, 그래도 2개 미만이면 null.
+ * - 기준선: asOf 이전에 끝난 가장 최근 정규장의 종가. 그 정규장이 자료에서 마지막 바로 앞 정규장이면(지금 장중)
  *   meta.previousClose가 그 장의 공식 종가라 그것을 쓴다. 끝난 정규장이 없으면 previousClose.
  */
 fun combine24h(spot: SpotSeries, futures: FuturesSeries, now: Long): CombinedChart? {
@@ -160,28 +174,37 @@ fun combine24h(spot: SpotSeries, futures: FuturesSeries, now: Long): CombinedCha
     points.sortBy { it.time }
 
     val lastPoint = points.lastOrNull() ?: return null
-    val end = minOf(now, lastPoint.time + BAR_SECONDS)
-    val start = end - WINDOW_SECONDS
-    val window = points.filter { it.time in start..end }
+    // 기준선·전일종가·끝난 정규장은 asOf로 정한다. 창(start, end)은 그림의 가로축이다.
+    val asOf = minOf(now, lastPoint.time + BAR_SECONDS)
+    fun pointsIn(from: Long): List<CombinedPoint> {
+        val until = minOf(asOf, from + WINDOW_SECONDS)
+        return points.filter { it.time in from..until }
+    }
+    val latestOpen = latestNewYorkOpen(asOf)
+    val latestWindow = pointsIn(latestOpen)
+    val useLatest = latestWindow.size >= 2
+    val start = if (useLatest) latestOpen else previousNewYorkOpen(latestOpen)
+    val window = if (useLatest) latestWindow else pointsIn(start)
     if (window.size < 2) return null
+    val end = start + WINDOW_SECONDS
 
-    val doneIndex = sessions.indexOfLast { it.end <= end }
+    val doneIndex = sessions.indexOfLast { it.end <= asOf }
     val baseline = when {
         doneIndex < 0 -> spot.previousClose
         doneIndex == sessions.lastIndex - 1 && spot.previousClose != null -> spot.previousClose
         else -> sessions[doneIndex].last.close
     }?.takeIf { it > 0 } ?: return null
 
-    // 전일종가: 창 끝까지 시작한 가장 최근 정규장의 바로 앞 정규장 종가. 그 정규장이 자료의 마지막이면
+    // 전일종가: asOf까지 시작한 가장 최근 정규장의 바로 앞 정규장 종가. 그 정규장이 자료의 마지막이면
     // meta.previousClose가 공식 값이다(장중이든 마감 뒤든 같다).
-    val latestIndex = sessions.indexOfLast { it.open <= end }
+    val latestIndex = sessions.indexOfLast { it.open <= asOf }
     val prevClose = when {
         latestIndex < 0 -> null
         latestIndex == sessions.lastIndex && spot.previousClose != null -> spot.previousClose
         latestIndex >= 1 -> sessions[latestIndex - 1].last.close
         else -> null
     }?.takeIf { it > 0 }
-    // 장마감 세로선: 기준선을 정한 정규장이 끝난 시각이 창 안에 있을 때만. 값은 기준선(그 장의 종가)과 같다.
+    // 장마감 표시: 기준선을 정한 정규장이 끝난 시각이 창 안에 있을 때만. 값은 기준선(그 장의 종가)과 같다.
     val closeTime = sessions.getOrNull(doneIndex)?.end?.takeIf { it in start..end }
 
     val values = window.map { round2(it.value) }
@@ -220,11 +243,23 @@ fun formatAfterCloseBadge(chart: CombinedChart): String = "마감 후 " + format
 fun formatCloseSummary(chart: CombinedChart): String =
     "종가 ${formatPrice(chart.close_price)}" + chart.closeChangePct?.let { " " + formatChangeBadge(it) }.orEmpty()
 
-/** 장마감 세로 점선의 가로 위치(0~1). 창 밖이거나 값이 없으면 null. */
-fun combinedCloseLine(chart: CombinedChart): Float? {
+/**
+ * 장마감 표시(v1.3). 선 위 장마감 지점의 점 위치(values 인덱스)와 문구 "장마감 7,417".
+ * 지점은 close_time과 같은 시각의 점, 없으면 close_time 이하에서 가장 가까운 점이다.
+ * close_time이 창 밖이거나 값이 없거나(옛 캐시) 그 이하 점이 없으면 null.
+ */
+fun combinedCloseMark(chart: CombinedChart): Pair<Int, String>? {
     if (chart.close_time <= 0 || chart.close_price <= 0 || chart.close_time !in chart.start..chart.end) return null
-    return sessionPosition(chart.close_time, chart.start, chart.end)
+    val index = chart.times.indexOfLast { it <= chart.close_time }
+    if (index < 0 || index >= chart.values.size) return null
+    return index to "장마감 ${formatPrice(chart.close_price)}"
 }
+
+private val START_TIME_FORMAT = DateTimeFormatter.ofPattern("HH:mm")
+
+/** 합친 차트 아래 왼쪽 문구. 창 시작(뉴욕 09:30)의 서울 시각, 예: "23:30~"(서머타임 "22:30~"). */
+fun combinedStartLabel(chart: CombinedChart): String =
+    Instant.ofEpochSecond(chart.start).atZone(SEOUL).format(START_TIME_FORMAT) + "~"
 
 /**
  * 그릴 합친 차트. S&P500·나스닥100의 오늘 기간이고 값이 온전할 때만 돌려준다. 아니면 null(기존 오늘 차트를 그린다).

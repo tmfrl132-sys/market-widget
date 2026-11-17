@@ -219,4 +219,31 @@ class SettingsTest {
         assertEquals("005930", settings.custom.single().naver_code)
         assertTrue(encodeSettings(settings).contains("\"version\":1"))
     }
+
+    // ---- v1.3: MDD 표시, NXT 시간 ----
+
+    @Test fun v13_defaultsDrawdownOnNxtOff() {
+        assertTrue(WidgetSettings().show_drawdown)
+        assertFalse(WidgetSettings().nxt_hours)
+    }
+
+    @Test fun v13_oldSettingsFileReadsDefaults() {
+        // v1.2까지의 settings.json에는 두 키가 없다
+        val old = parseSettings("""{"version": 1, "order": ["GSPC"], "hidden": ["VIX"], "custom": []}""")
+        assertTrue(old.show_drawdown)
+        assertFalse(old.nxt_hours)
+        assertEquals(listOf("GSPC"), old.order)
+        assertEquals(listOf("VIX"), old.hidden)
+    }
+
+    @Test fun v13_roundTripAndMigrationKeepFlags() {
+        val settings = WidgetSettings(order = listOf("IXIC"), show_drawdown = false, nxt_hours = true)
+        assertEquals(settings, parseSettings(encodeSettings(settings)))
+        val migrated = migrateSettings(settings)
+        assertEquals(listOf("NDX"), migrated.order)
+        assertFalse(migrated.show_drawdown)
+        assertTrue(migrated.nxt_hours)
+        // 기본값으로(순서·켜기)는 두 설정을 건드리지 않는다
+        assertEquals(settings.copy(order = emptyList()), resetOrder(settings))
+    }
 }

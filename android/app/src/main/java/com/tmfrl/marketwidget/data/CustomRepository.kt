@@ -20,6 +20,7 @@ import com.tmfrl.marketwidget.model.maxDue
 import com.tmfrl.marketwidget.model.maxFields
 import com.tmfrl.marketwidget.model.naverStockQuote
 import com.tmfrl.marketwidget.model.naverStockWindow
+import com.tmfrl.marketwidget.model.nxtStockQuote
 import com.tmfrl.marketwidget.model.parseCustomCache
 import com.tmfrl.marketwidget.model.parseIntraday
 import com.tmfrl.marketwidget.model.parseLiveQuote
@@ -47,6 +48,9 @@ private const val YAHOO_5Y_URL = "https://query1.finance.yahoo.com/v8/finance/ch
 private const val YAHOO_MAX_URL = "https://query1.finance.yahoo.com/v8/finance/chart/%s?period1=0&period2=%d&interval=1d"
 private const val NAVER_STOCK_URL = "https://m.stock.naver.com/api/stock/%s/basic"
 private const val NAVER_STOCK_MINUTE_URL = "https://api.stock.naver.com/chart/domestic/item/%s/minute"
+
+/** 넥스트레이드(NXT) 1분봉 08:00~20:00. 네이버 차트가 NXT 종목에 쓰는 주소다. NXT 비거래 종목은 빈 목록이다. */
+private const val NAVER_NXT_MINUTE_URL = "https://api.stock.naver.com/chart/domestic/NXT/item/%s/minute"
 
 /** 한 번에 받는 추가 종목 수. 한꺼번에 수십 요청을 보내 Yahoo가 막는 일을 줄인다. */
 private const val PARALLEL_TICKERS = 4
@@ -81,7 +85,11 @@ class CustomRepository(
             val entries = coroutineScope {
                 settings.custom.map { ticker ->
                     async {
-                        if (ticker.id in hidden) old[ticker.id] else permits.withPermit { fetchTicker(ticker, old[ticker.id], now) }
+                        if (ticker.id in hidden) {
+                            old[ticker.id]
+                        } else {
+                            permits.withPermit { fetchTicker(ticker, old[ticker.id], now, settings.nxt_hours) }
+                        }
                     }
                 }.awaitAll().filterNotNull()
             }
@@ -89,15 +97,14 @@ class CustomRepository(
         }
     }
 
-    private fun fetchTicker(ticker: CustomTicker, previous: CustomEntry?, now: ZonedDateTime): CustomEntry {
+    /** nxt가 true면 한국 개별 종목에 넥스트레이드(NXT) 프리·애프터마켓을 넣는다(설정 "국내주식 NXT 시간 포함"). */
+    private fun fetchTicker(ticker: CustomTicker, previous: CustomEntry?, now: ZonedDateTime, nxt: Boolean = false): CustomEntry {
         val nowMillis = now.toInstant().toEpochMilli()
         val updatedAt = now.toOffsetDateTime().toString()
         return try {
             val encoded = URLEncoder.encode(ticker.symbol, "UTF-8")
             var marketTz: String? = null
-            val naver = ticker.naver_code?.takeIf { naverStockWindow(now) }?.let { code ->
-                orElse(null) { naverStockQuote(get(NAVER_STOCK_URL.format(code)), get(NAVER_STOCK_MINUTE_URL.format(code)), now) }
-            }
+            val naver = ticker.naver_code?.let { code -> naverQuote(code, now, nxt) }
             val live: LiveQuote? = naver ?: orElse(null) {
                 val text = get(YAHOO_URL.format(encoded))
                 marketTz = parseYahooChart(text)?.meta?.exchangeTimezoneName
@@ -131,6 +138,24 @@ class CustomRepository(
             // 응답이 뜻밖의 모양이어도 다른 종목과 기본 지표 갱신은 이어간다
             failed(ticker, previous, updatedAt)
         }
+    }
+
+    /**
+     * 네이버 한국 개별 종목 시세. 실패하거나 쓸 시간이 아니면 null(Yahoo로 받는다).
+     * NXT를 켜면 시간과 상관없이 NXT 분봉까지 받아 nxtStockQuote로 잇는다. NXT 분봉을 못 받으면 빈 목록으로 보고
+     * 꺼진 것과 같은 결과가 된다. 끄면 지금까지처럼 서울 평일 09:00~16:00에만 받는다.
+     */
+    private fun naverQuote(code: String, now: ZonedDateTime, nxt: Boolean): LiveQuote? = when {
+        nxt -> orElse(null) {
+            val basic = get(NAVER_STOCK_URL.format(code))
+            val krxMinutes = get(NAVER_STOCK_MINUTE_URL.format(code))
+            val nxtMinutes = orElse("[]") { get(NAVER_NXT_MINUTE_URL.format(code)) }
+            nxtStockQuote(basic, krxMinutes, nxtMinutes, now)
+        }
+        naverStockWindow(now) -> orElse(null) {
+            naverStockQuote(get(NAVER_STOCK_URL.format(code)), get(NAVER_STOCK_MINUTE_URL.format(code)), now)
+        }
+        else -> null
     }
 
     /** 1년 일봉 또는 5년 주봉. 실패하거나 결과가 없으면 null(직전 값을 쓴다). zone은 응답의 시장 시간대를 받는다. */

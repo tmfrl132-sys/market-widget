@@ -303,6 +303,17 @@ fun naverStockWindow(now: ZonedDateTime): Boolean {
 private data class NaverStock(
     val closePrice: String? = null,
     val compareToPreviousClosePrice: String? = null,
+    // v1.3 NXT. 넥스트레이드 거래 종목만 있다. 장 상태에 따라 없거나 null일 수 있다.
+    val overMarketPriceInfo: NaverOverMarket? = null,
+)
+
+/** basic 응답의 넥스트레이드(NXT) 프리·애프터마켓 시세. 등락은 KRX 전일종가 대비, localTradedAt은 "2026-11-17T20:00:00+09:00" 형식이다. */
+@Serializable
+private data class NaverOverMarket(
+    val tradingSessionType: String? = null,
+    val overPrice: String? = null,
+    val compareToPreviousClosePrice: String? = null,
+    val localTradedAt: String? = null,
 )
 
 /**
@@ -342,6 +353,75 @@ fun naverStockQuote(basicText: String, minuteText: String, now: ZonedDateTime): 
         intradayTimes = kept.map { it.first.atZone(SEOUL).toEpochSecond() },
         sessionStart = epochAt(NAVER_OPEN),
         sessionEnd = epochAt(NAVER_CLOSE),
+    )
+}
+
+/** 넥스트레이드(NXT)를 넣은 장 시간. 프리마켓 08:00~08:50, 애프터마켓 15:30~20:00. */
+private val NXT_OPEN = LocalTime.of(8, 0)
+private val NXT_CLOSE = LocalTime.of(20, 0)
+
+private data class NaverBar(val time: LocalDateTime, val price: Double)
+
+/** 네이버 1분봉(서울 시각). 값이나 시각을 읽을 수 없는 봉은 뺀다. */
+private fun naverBars(text: String): List<NaverBar> =
+    json.decodeFromString<List<NaverMinute>>(text).mapNotNull { bar ->
+        val price = bar.currentPrice ?: return@mapNotNull null
+        val time = try {
+            LocalDateTime.parse(bar.localDateTime, NAVER_TIME_FORMAT)
+        } catch (e: DateTimeException) {
+            return@mapNotNull null
+        }
+        NaverBar(time, price)
+    }
+
+/**
+ * "국내주식 NXT 시간 포함"을 켠 한국 개별 종목 시세(v1.3).
+ * krxMinuteText는 기존 분봉(.../domestic/item/{code}/minute), nxtMinuteText는 NXT 분봉(.../domestic/NXT/item/{code}/minute)이다.
+ *
+ * - 날짜: 두 분봉 중 가장 늦은 봉의 날짜. 그 날짜의 봉으로 08:00~09:00은 NXT, 09:00~15:30:59는 KRX, 그 뒤 20:00까지는 NXT를 잇는다.
+ * - 값: 이은 봉의 마지막 값. 기준(전일종가)은 KRX 전일종가 = basic.overMarketPriceInfo의 overPrice − compareToPreviousClosePrice다.
+ * - 장 시간: 그 날짜 08:00~20:00. 오늘 봉은 이은 봉을 5개마다 1개로 줄인다(마지막 봉은 지킨다).
+ * - NXT 봉이 그 날짜에 없거나(NXT 비거래 종목은 빈 목록), NXT 시세가 없거나 날짜가 다르거나, NXT 분봉을 읽을 수 없으면
+ *   꺼진 것과 같은 naverStockQuote 결과다(09:00~16:00 밖이면 null이라 Yahoo로 받는다).
+ * 서울 시간 창은 따지지 않는다. 20:00 뒤와 주말에도 그 날짜 NXT 마지막 값과 08:00~20:00 장 시간을 그대로 보인다.
+ */
+fun nxtStockQuote(basicText: String, krxMinuteText: String, nxtMinuteText: String, now: ZonedDateTime): LiveQuote? {
+    val nxt = try {
+        naverBars(nxtMinuteText)
+    } catch (e: IllegalArgumentException) { // SerializationException 포함
+        emptyList()
+    }
+    val krx = naverBars(krxMinuteText)
+    val day = (nxt + krx).maxOfOrNull { it.time }?.toLocalDate() ?: return naverStockQuote(basicText, krxMinuteText, now)
+    if (nxt.none { it.time.toLocalDate() == day }) return naverStockQuote(basicText, krxMinuteText, now)
+    val over = json.decodeFromString<NaverStock>(basicText).overMarketPriceInfo
+        ?.takeIf { it.localTradedAt?.take(10) == day.toString() }
+    val overPrice = naverNumber(over?.overPrice)
+    val overCompare = naverNumber(over?.compareToPreviousClosePrice)
+    if (overPrice == null || overCompare == null) return naverStockQuote(basicText, krxMinuteText, now)
+    val prevClose = round2(overPrice - overCompare)
+    if (prevClose <= 0.0) return naverStockQuote(basicText, krxMinuteText, now)
+
+    val onDay = { bar: NaverBar -> bar.time.toLocalDate() == day }
+    val pre = nxt.filter { onDay(it) && it.time.toLocalTime() < NAVER_OPEN }
+    val regular = krx.filter { onDay(it) && it.time.toLocalTime() >= NAVER_OPEN && it.time.toLocalTime() <= KRX_LAST_BAR }
+    val after = nxt.filter { onDay(it) && it.time.toLocalTime() > KRX_LAST_BAR && it.time.toLocalTime() <= NXT_CLOSE }
+    val bars = (pre + regular + after).sortedBy { it.time }
+    if (bars.isEmpty()) return naverStockQuote(basicText, krxMinuteText, now)
+
+    val price = bars.last().price
+    val change = round2(price - prevClose)
+    val kept = bars.filterIndexed { i, _ -> i % NAVER_MINUTE_STEP == 0 || i == bars.lastIndex }
+    val epochAt = { time: LocalTime -> day.atTime(time).atZone(SEOUL).toEpochSecond() }
+    return LiveQuote(
+        price = price,
+        change = change,
+        changePct = round2(change / prevClose * 100),
+        prevClose = prevClose,
+        intraday = kept.map { round2(it.price) },
+        intradayTimes = kept.map { it.time.atZone(SEOUL).toEpochSecond() },
+        sessionStart = epochAt(NXT_OPEN),
+        sessionEnd = epochAt(NXT_CLOSE),
     )
 }
 

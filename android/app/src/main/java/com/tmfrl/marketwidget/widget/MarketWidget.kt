@@ -71,7 +71,9 @@ import com.tmfrl.marketwidget.model.combinedBands
 import com.tmfrl.marketwidget.model.combinedChartFor
 import com.tmfrl.marketwidget.model.combinedXAxis
 import com.tmfrl.marketwidget.model.afterCloseChartFor
-import com.tmfrl.marketwidget.model.combinedCloseLine
+import com.tmfrl.marketwidget.model.combinedCloseMark
+import com.tmfrl.marketwidget.model.combinedStartLabel
+import com.tmfrl.marketwidget.model.WidgetSettings
 import com.tmfrl.marketwidget.model.formatAfterCloseBadge
 import com.tmfrl.marketwidget.model.formatCloseSummary
 import com.tmfrl.marketwidget.model.convertedLabel
@@ -158,9 +160,6 @@ private val EPISODE_SHADE = Color(0x1F4D8DFF)
 /** 합친 24시간 차트의 정규장 띠. 낙폭 구간 칠(파랑)과 겹치지 않게 흰색을 약 8% 알파로 깐다. */
 private val SESSION_BAND = Color(0x14FFFFFF)
 
-/** 합친 24시간 차트 아래 왼쪽 문구. 창 시작이 24시간 전이다. */
-private const val COMBINED_START_LABEL = "24시간 전"
-
 /** 장중 점. 빨강·파랑은 등락 전용이라 초록을 쓴다. */
 private val LIVE_DOT = Color(0xFF34D399)
 
@@ -208,9 +207,8 @@ private fun MutablePreferences.setSelection(s: ChartSelection) {
  * 위젯에 그릴 데이터. data.json 캐시의 기본 지표와 추가 종목 캐시를 설정(켜기·순서)대로 합친다.
  * data.json 캐시가 없으면 null이다(추가 종목만으로는 그리지 않는다. 기본 지표 캐시는 첫 갱신에서 바로 생긴다).
  */
-private fun widgetData(context: Context): MarketData? {
+private fun widgetData(context: Context, settings: WidgetSettings = SettingsStore.forContext(context).read()): MarketData? {
     val data = Repository.forContext(context).cached() ?: return null
-    val settings = SettingsStore.forContext(context).read()
     return data.copy(quotes = visibleQuotes(data.quotes, CustomRepository.forContext(context).cached(), settings))
 }
 
@@ -226,12 +224,13 @@ class MarketWidget : GlanceAppWidget() {
             // 상태를 읽어 두면 DATA_VERSION·SELECTED·PERIOD가 바뀔 때마다 다시 그리면서 캐시와 설정을 새로 읽는다
             val state = currentState<Preferences>()
             state[DATA_VERSION]
-            val data = widgetData(context)
+            val settings = SettingsStore.forContext(context).read()
+            val data = widgetData(context, settings)
             // 꺼지거나 지운 지표를 가리키는 선택은 그릴 때 정리한다. 저장된 상태는 다음 액션 때 덮인다.
             val selection = if (data == null) state.selection() else sanitizeSelection(state.selection(), data.quotes.map { it.id })
             WidgetContent(
                 data, ZonedDateTime.now(), selection, parsePeriod(state[PERIOD]),
-                state[LOG_SCALE] == true, state[AUTO] == true,
+                state[LOG_SCALE] == true, state[AUTO] == true, settings.show_drawdown,
             )
         }
     }
@@ -350,6 +349,7 @@ private fun Dp.toPx(density: Float) = (value * density).toInt()
 @Composable
 private fun WidgetContent(
     data: MarketData?, now: ZonedDateTime, selection: ChartSelection, period: Period, logScale: Boolean, auto: Boolean,
+    showDrawdown: Boolean,
 ) {
     val size = LocalSize.current
     Column(
@@ -367,7 +367,7 @@ private fun WidgetContent(
                 modifier = GlanceModifier.clickable(actionRunCallback<RefreshAction>()),
             )
         } else {
-            QuotesAndDetail(data, now, selection, period, logScale, auto, size, GlanceModifier.defaultWeight())
+            QuotesAndDetail(data, now, selection, period, logScale, auto, showDrawdown, size, GlanceModifier.defaultWeight())
         }
     }
 }
@@ -375,7 +375,7 @@ private fun WidgetContent(
 @Composable
 private fun QuotesAndDetail(
     data: MarketData, now: ZonedDateTime, selection: ChartSelection, period: Period, logScale: Boolean, auto: Boolean,
-    size: DpSize, modifier: GlanceModifier,
+    showDrawdown: Boolean, size: DpSize, modifier: GlanceModifier,
 ) {
     // 한 줄 칸 수는 위젯 폭으로 정하고, 줄 수가 늘면 차트·일정 칸 위쪽 높이도 그만큼 늘린다
     val grid = tileGrid(size.width.value, data.quotes.size)
@@ -410,7 +410,7 @@ private fun QuotesAndDetail(
                 val other = if (auto) null else data.quotes.firstOrNull { it.id == selection.compare && it.id != chosen.id }
                 val state = asOf?.let { marketState(chosen, it) }
                 ChartPanel(
-                    chosen, other, !auto && selection.picking, state, period, logScale, auto,
+                    chosen, other, !auto && selection.picking, state, period, logScale, auto, showDrawdown,
                     size.width - 20.dp, detailHeight, GlanceModifier.defaultWeight(),
                 )
             } else if (chosen != null) {
@@ -580,7 +580,7 @@ private enum class CompareButton { OFF, PICKING, ON }
 @Composable
 private fun ChartPanel(
     quote: Quote, other: Quote?, picking: Boolean, state: MarketState?, period: Period, logScale: Boolean, auto: Boolean,
-    width: Dp, height: Dp, modifier: GlanceModifier,
+    showDrawdown: Boolean, width: Dp, height: Dp, modifier: GlanceModifier,
 ) {
     val series = other?.let { compareSeries(quote, it, period) }
     if (other != null && series != null) {
@@ -611,7 +611,8 @@ private fun ChartPanel(
     val (color, tint) = trendColors(changePct)
     val density = LocalContext.current.resources.displayMetrics.density
     // 잠수 차트. 오늘, 낙폭 없는 지표(원/달러·달러인덱스·미 10년물·VIX), 점이 모자라면 null이다.
-    val drawdown = drawdownChart(quote, period)
+    // 설정에서 MDD 표시를 끄면 null로 두어 낙폭 줄, 잠수 차트, 최대 낙폭 구간 칠, 고점·바닥 점을 모두 그리지 않는다.
+    val drawdown = if (showDrawdown) drawdownChart(quote, period) else null
     // 차트 그림 높이 = 칸 높이 - 위 두 줄(이름·최저최고) - 낙폭 줄 - 아래 두 줄(기간 표시, 기간 선택)
     val imagesHeight = maxOf(40.dp, height - (if (drawdown != null) 100.dp else 84.dp))
     val showUnderwater = drawdown != null && imagesHeight >= MIN_STACKED_HEIGHT
@@ -671,8 +672,8 @@ private fun ChartPanel(
         dots = dots,
         breaks = combined?.breaks.orEmpty(),
         bands = combined?.let(::combinedBands).orEmpty(),
-        vline = combined?.let(::combinedCloseLine),
-        vlineLabel = combined?.let { "장마감 ${formatPrice(it.close_price)}" }.orEmpty(),
+        // 장마감 지점: 세로 점선 대신 선 위 점과 "장마감 7,417"(v1.3). 창 밖이면 없다.
+        marks = listOfNotNull(combined?.let(::combinedCloseMark)),
     )
     // 마감 뒤(다음 개장 전)면 머리줄 등락이 종가 대비 "마감 후"이고, 둘째 줄 앞에 종가와 그 등락률을 쓴다
     val afterClose = combined?.takeIf { it.afterClose }
@@ -756,7 +757,7 @@ private fun ChartPanel(
         }
         Row(modifier = GlanceModifier.fillMaxWidth().padding(top = 2.dp)) {
             val startLabel = when {
-                combined != null -> COMBINED_START_LABEL
+                combined != null -> combinedStartLabel(combined)
                 period == Period.MAX && quote.max_start != null -> "${quote.max_start}년~"
                 else -> period.agoLabel
             }
@@ -848,8 +849,6 @@ private fun detailBitmap(
     dots: List<Pair<Int, Int>> = emptyList(),
     breaks: List<Int> = emptyList(),
     bands: List<ClosedFloatingPointRange<Float>> = emptyList(),
-    vline: Float? = null,
-    vlineLabel: String = "",
 ): Bitmap {
     return renderLine(
         values = values,
@@ -880,8 +879,6 @@ private fun detailBitmap(
         breaks = breaks,
         bands = bands,
         bandColor = SESSION_BAND.toArgb(),
-        vline = vline,
-        vlineLabel = vlineLabel,
     )
 }
 

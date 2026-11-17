@@ -22,6 +22,8 @@ data class CustomTicker(
 /**
  * 위젯에 보일 지표 설정(settings.json). 모든 위젯이 같이 쓴다.
  * order는 보일 순서(없는 id는 뒤에 붙는다), hidden은 끈 지표, custom은 추가 종목(추가한 순서)이다.
+ * v1.3: show_drawdown은 큰 차트의 고점 대비 낙폭(MDD) 표시(기본 켜짐), nxt_hours는 추가한 한국 개별 종목에
+ * 넥스트레이드(NXT) 08:00~20:00 시세를 넣는지(기본 꺼짐)다. 옛 settings.json에는 없어 기본값으로 읽힌다.
  */
 @Serializable
 data class WidgetSettings(
@@ -29,6 +31,8 @@ data class WidgetSettings(
     val order: List<String> = emptyList(),
     val hidden: List<String> = emptyList(),
     val custom: List<CustomTicker> = emptyList(),
+    val show_drawdown: Boolean = true,
+    val nxt_hours: Boolean = false,
 )
 
 const val KIND_EQUITY = "EQUITY"

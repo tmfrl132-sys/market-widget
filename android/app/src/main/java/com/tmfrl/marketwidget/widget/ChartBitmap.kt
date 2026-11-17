@@ -37,7 +37,7 @@ import com.tmfrl.marketwidget.model.yPosition
  * baselineLabel이 빈 문자열이면 점선 문구와 그 배경 칸을 그리지 않는다.
  * breaks는 선과 영역을 끊을 점 위치(그 점 앞에서 끊는다, 합친 24시간 차트의 정비 시간·주말)다. 비면 지금처럼 한 선이다.
  * bands는 그림 영역 높이로 옅게 칠할 가로 구간(0~1, 정규장)이고 bandColor로 칠한다. detailed일 때만 쓰고 가장 먼저 그린다.
- * vline은 세로 점선의 가로 위치(0~1, 정규장 마감 시각)이고 vlineLabel은 그 위쪽 문구다. detailed일 때만 그린다.
+ * 합친 24시간 차트의 장마감 지점은 v1.3부터 세로 점선 대신 marks(점과 "장마감 7,417")로 그린다.
  */
 fun renderLine(
     values: List<Double>,
@@ -68,8 +68,6 @@ fun renderLine(
     breaks: List<Int> = emptyList(),
     bands: List<ClosedFloatingPointRange<Float>> = emptyList(),
     bandColor: Int = 0,
-    vline: Float? = null,
-    vlineLabel: String = "",
 ): Bitmap {
     val w = widthPx.coerceAtLeast(2)
     val h = heightPx.coerceAtLeast(2)
@@ -151,16 +149,6 @@ fun renderLine(
         })
     }
     if (axis != null && baseline != null) drawBaseline(canvas, baseline, axis, text, plotW, plotH, pad, strokePx)
-    val vlineX = if (detailed && vline != null && vline in 0f..1f) pad + vline * (plotW - 2 * pad) else null
-    if (vlineX != null) {
-        val dash = strokePx * 2
-        canvas.drawLine(vlineX, 0f, vlineX, plotH, Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            color = textColor
-            strokeWidth = (strokePx / 2).coerceAtLeast(1f)
-            pathEffect = DashPathEffect(floatArrayOf(dash, dash), 0f)
-        })
-    }
     if (secondPoints.isNotEmpty()) canvas.drawPath(linePath(secondPoints), strokePaint(secondColor, strokePx))
     canvas.drawPath(line, strokePaint(lineColor, strokePx))
     if (detailed) {
@@ -171,11 +159,6 @@ fun renderLine(
             drawBaselineLabel(canvas, baselineLabel, baseline, values.last(), axis, text, backgroundColor, plotW, plotH, pad)
         }
         drawMarks(canvas, marks.filter { (i, _) -> i in points.indices }, points, text, backgroundColor, plotW, strokePx)
-        if (vlineX != null && vlineLabel.isNotEmpty()) {
-            // 점선 문구가 위쪽 절반에 있으면 겹치지 않게 아래쪽에 둔다
-            val baselineY = if (axis != null && baseline != null) yPosition(baseline, axis.min, axis.max, plotH, pad) else plotH
-            drawVlineLabel(canvas, vlineLabel, vlineX, text, backgroundColor, plotW, top = baselineY >= plotH / 2, plotH = plotH)
-        }
         if (showXLabels) {
             val baselineY = h - textPx * X_BAND_BOTTOM_LINES
             xLabels.forEach { label -> canvas.drawText(label.text, label.left, baselineY, text) }
@@ -285,19 +268,6 @@ private fun drawBaseline(
         strokeWidth = (strokePx / 2).coerceAtLeast(1f)
         pathEffect = DashPathEffect(floatArrayOf(dash, dash), 0f)
     })
-}
-
-/** 세로 점선 문구. 선 왼쪽에 두고 왼쪽 자리가 모자라면 오른쪽에 둔다. top이면 그림 위쪽, 아니면 아래쪽이다. */
-private fun drawVlineLabel(
-    canvas: Canvas, label: String, x: Float, text: Paint, backgroundColor: Int, plotW: Float, top: Boolean, plotH: Float,
-) {
-    val size = text.textSize
-    val width = text.measureText(label)
-    val gap = size * 0.3f
-    val left = (if (x - gap - width >= 0f) x - gap - width else x + gap).coerceIn(0f, (plotW - width).coerceAtLeast(0f))
-    val textY = if (top) size * 1.1f else (plotH - size * 0.4f).coerceAtLeast(size)
-    canvas.drawRect(left - size * 0.2f, textY - size, left + width + size * 0.2f, textY + size * 0.25f, Paint().apply { color = backgroundColor })
-    canvas.drawText(label, left, textY, text)
 }
 
 /** 점선 숫자. 마지막 값 점과 반대쪽에 두고, 선이 지나가도 읽히게 배경을 깐다. */
