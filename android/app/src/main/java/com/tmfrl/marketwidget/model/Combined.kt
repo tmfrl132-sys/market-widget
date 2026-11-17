@@ -77,9 +77,20 @@ data class CombinedChart(
     val change_pct: Double = 0.0,
     val low: Double = 0.0,
     val high: Double = 0.0,
+    // v1.2. 옛 캐시에는 없어 0이고, 0이면 해당 선·문구를 그리지 않는다.
+    val prev_close: Double = 0.0, // 가장 최근 정규장의 전일종가(가로 점선)
+    val close_time: Long = 0, // 창 안에서 가장 최근에 끝난 정규장의 마감 시각(세로 점선)
+    val close_price: Double = 0.0, // 그 정규장의 종가(= 장외 환산의 기준)
 ) {
     /** 마지막 점이 선물 환산값인지. */
     val lastConverted: Boolean get() = converted.lastOrNull() == true
+
+    /** 정규장이 끝나고 다음 개장 전인지. 이때 price는 환산가, change_pct는 종가 대비 "마감 후" 등락률이다. */
+    val afterClose: Boolean get() = lastConverted && close_price > 0
+
+    /** 종가의 전일종가 대비 등락률. 둘 중 하나라도 없으면 null. */
+    val closeChangePct: Double?
+        get() = if (close_price > 0 && prev_close > 0) round2((close_price - prev_close) / prev_close * 100) else null
 }
 
 private fun round2(value: Double) = round(value * 100) / 100
@@ -161,6 +172,18 @@ fun combine24h(spot: SpotSeries, futures: FuturesSeries, now: Long): CombinedCha
         else -> sessions[doneIndex].last.close
     }?.takeIf { it > 0 } ?: return null
 
+    // 전일종가: 창 끝까지 시작한 가장 최근 정규장의 바로 앞 정규장 종가. 그 정규장이 자료의 마지막이면
+    // meta.previousClose가 공식 값이다(장중이든 마감 뒤든 같다).
+    val latestIndex = sessions.indexOfLast { it.open <= end }
+    val prevClose = when {
+        latestIndex < 0 -> null
+        latestIndex == sessions.lastIndex && spot.previousClose != null -> spot.previousClose
+        latestIndex >= 1 -> sessions[latestIndex - 1].last.close
+        else -> null
+    }?.takeIf { it > 0 }
+    // 장마감 세로선: 기준선을 정한 정규장이 끝난 시각이 창 안에 있을 때만. 값은 기준선(그 장의 종가)과 같다.
+    val closeTime = sessions.getOrNull(doneIndex)?.end?.takeIf { it in start..end }
+
     val values = window.map { round2(it.value) }
     val current = window.last().value
     return CombinedChart(
@@ -177,7 +200,30 @@ fun combine24h(spot: SpotSeries, futures: FuturesSeries, now: Long): CombinedCha
         change_pct = round2((current - baseline) / baseline * 100),
         low = values.min(),
         high = values.max(),
+        prev_close = prevClose?.let(::round2) ?: 0.0,
+        close_time = closeTime ?: 0,
+        close_price = if (doneIndex >= 0) round2(baseline) else 0.0,
     )
+}
+
+/** 타일에 쓸 합친 차트. S&P500·나스닥100이고 정규장 마감 뒤(다음 개장 전)일 때만. 기간과 상관없다. */
+fun afterCloseChartFor(quote: Quote): CombinedChart? {
+    val chart = quote.combined ?: return null
+    if (quote.id !in COMBINED_FUTURES || !chart.afterClose || chart.values.isEmpty()) return null
+    return chart
+}
+
+/** "마감 후 ▲0.30%". 마감 뒤 환산가의 종가 대비 등락률이다. */
+fun formatAfterCloseBadge(chart: CombinedChart): String = "마감 후 " + formatChangeBadge(chart.change_pct)
+
+/** "종가 7,417 ▼1.92%"(종가와 그 전일종가 대비 등락률). 전일종가가 없으면 등락률을 뺀다. */
+fun formatCloseSummary(chart: CombinedChart): String =
+    "종가 ${formatPrice(chart.close_price)}" + chart.closeChangePct?.let { " " + formatChangeBadge(it) }.orEmpty()
+
+/** 장마감 세로 점선의 가로 위치(0~1). 창 밖이거나 값이 없으면 null. */
+fun combinedCloseLine(chart: CombinedChart): Float? {
+    if (chart.close_time <= 0 || chart.close_price <= 0 || chart.close_time !in chart.start..chart.end) return null
+    return sessionPosition(chart.close_time, chart.start, chart.end)
 }
 
 /**

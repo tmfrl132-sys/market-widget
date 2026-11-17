@@ -480,6 +480,59 @@ class CombinedTest {
         assertEquals(listOf(101.0, 102.5), combine24h(spot, futures, ny("2026-11-12", "18:10"))!!.values.takeLast(2))
     }
 
+    // ---- v1.2: 전일종가 선, 장마감 선, 마감 후 등락 ----
+
+    /** 수요일 종가 7,617.84, 목요일 종가 7,592.4(전일종가 7,619.38). 목요일 16:05부터 선물이 기준(7,616)보다 0.5% 높다. */
+    private val afterCloseFutures = FuturesSeries(
+        wedThuFutures.bars.filter { it.time <= ny("2026-11-12", "16:00") } + futuresBars("2026-11-12", "16:05", "18:00") { 7654.08 },
+    )
+
+    @Test fun afterClose_convertedPriceAndPctFromCloseAnchor() {
+        val chart = combine24h(wedThuSpot, afterCloseFutures, ny("2026-11-12", "18:02"))!!
+        assertTrue(chart.afterClose)
+        // 7,592.4 × 7,654.08 / 7,616 = 7,630.36
+        assertEquals(7630.36, chart.price, 1e-9)
+        assertEquals(0.5, chart.change_pct, 1e-9)
+        assertEquals(7619.38, chart.prev_close, 0.0)
+        assertEquals(7592.4, chart.close_price, 0.0)
+        assertEquals(ny("2026-11-12", "16:00"), chart.close_time)
+        assertEquals(-0.35, chart.closeChangePct!!, 1e-9)
+        assertEquals("마감 후 ▲0.50%", formatAfterCloseBadge(chart))
+        assertTrue(formatCloseSummary(chart), formatCloseSummary(chart).startsWith("종가 7,592"))
+        assertTrue(formatCloseSummary(chart).endsWith(" ▼0.35%"))
+        assertEquals(sessionPosition(chart.close_time, chart.start, chart.end), combinedCloseLine(chart)!!, 0f)
+        // 마감 지점에서 끊기지 않는다(16:00 종가 봉과 16:05 환산 봉은 5분 간격)
+        assertTrue(chart.breaks.none { chart.times[it] == ny("2026-11-12", "16:05") })
+    }
+
+    @Test fun inSession_prevCloseLineAndYesterdayCloseLine() {
+        val now = ny("2026-11-12", "15:58")
+        val spot = wedThuSpot.copy(bars = wedThuSpot.bars.filter { it.time <= ny("2026-11-12", "15:55") })
+        val chart = combine24h(spot, wedThuFutures.copy(bars = wedThuFutures.bars.filter { it.time <= now }), now)!!
+        assertFalse(chart.afterClose)
+        assertEquals(7619.38, chart.prev_close, 0.0)
+        // 장마감 세로선은 어제(수요일) 16:00, 값은 그 공식 종가
+        assertEquals(ny("2026-11-11", "16:00"), chart.close_time)
+        assertEquals(7619.38, chart.close_price, 0.0)
+        assertNotNull(combinedCloseLine(chart))
+        val gspc = Quote("GSPC", "S&P500", 7590.0, 0.0, 0.0, combined = chart)
+        assertNull(afterCloseChartFor(gspc))
+    }
+
+    @Test fun afterCloseChartFor_onlySpAndNasdaq100AfterClose() {
+        val chart = combine24h(wedThuSpot, afterCloseFutures, ny("2026-11-12", "18:02"))!!
+        val gspc = Quote("GSPC", "S&P500", 7592.4, 0.0, 0.0, combined = chart)
+        assertEquals(chart, afterCloseChartFor(gspc))
+        assertNotNull(afterCloseChartFor(gspc.copy(id = "NDX")))
+        assertNull(afterCloseChartFor(gspc.copy(id = "CL")))
+        assertNull(afterCloseChartFor(gspc.copy(combined = null)))
+        // 옛 캐시(종가 없음)는 마감 후 표시를 하지 않고, 장마감 선도 그리지 않는다
+        val old = chart.copy(prev_close = 0.0, close_time = 0, close_price = 0.0)
+        assertNull(afterCloseChartFor(gspc.copy(combined = old)))
+        assertNull(combinedCloseLine(old))
+        assertNull(old.closeChangePct)
+    }
+
     // ---- 화면용 ----
 
     private val drawable = CombinedChart(

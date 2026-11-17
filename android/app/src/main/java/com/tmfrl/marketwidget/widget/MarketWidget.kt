@@ -70,6 +70,10 @@ import com.tmfrl.marketwidget.model.chartSummary
 import com.tmfrl.marketwidget.model.combinedBands
 import com.tmfrl.marketwidget.model.combinedChartFor
 import com.tmfrl.marketwidget.model.combinedXAxis
+import com.tmfrl.marketwidget.model.afterCloseChartFor
+import com.tmfrl.marketwidget.model.combinedCloseLine
+import com.tmfrl.marketwidget.model.formatAfterCloseBadge
+import com.tmfrl.marketwidget.model.formatCloseSummary
 import com.tmfrl.marketwidget.model.convertedLabel
 import com.tmfrl.marketwidget.model.compareLogChart
 import com.tmfrl.marketwidget.model.compareSeries
@@ -474,7 +478,11 @@ private fun QuoteTile(
 ) {
     val alpha = if (quote.stale) 0.5f else 1f
     val tileColor = if (selected) TILE_SELECTED else TILE
-    val (color, tint) = trendColors(quote.change_pct)
+    // S&P500·나스닥100이 정규장 마감 뒤(다음 개장 전)면 큰 차트 머리줄과 같은 기준으로 보인다:
+    // 선물 환산가와 종가 대비 "마감 후" 등락률, 그 아래 종가와 전일종가 대비 등락률.
+    val afterClose = afterCloseChartFor(quote)
+    val shownPct = afterClose?.change_pct ?: quote.change_pct
+    val (color, tint) = trendColors(shownPct)
     val accent = when (bigMoveTrend(quote)) {
         Trend.UP -> UP
         Trend.DOWN -> DOWN
@@ -510,22 +518,26 @@ private fun QuoteTile(
                         }
                     }
                 }
-                Text(formatPrice(quote.price), style = style(TEXT.copy(alpha = alpha), 14, bold = true), maxLines = 1)
+                Text(formatPrice(afterClose?.price ?: quote.price), style = style(TEXT.copy(alpha = alpha), 14, bold = true), maxLines = 1)
                 Box(
                     modifier = GlanceModifier.background(accent ?: tint)
                         .cornerRadius(6.dp)
                         .padding(horizontal = 4.dp, vertical = 1.dp),
                 ) {
                     Text(
-                        formatChangeBadge(quote.change_pct),
+                        afterClose?.let(::formatAfterCloseBadge) ?: formatChangeBadge(quote.change_pct),
                         style = style(if (accent != null) TEXT else color.copy(alpha = alpha), 10, bold = true),
                         maxLines = 1,
                     )
                 }
+                if (afterClose != null) {
+                    Text(formatCloseSummary(afterClose), style = style(SUBTLE.copy(alpha = alpha), 9), maxLines = 1)
+                }
                 if (showSpark) {
                     val density = LocalContext.current.resources.displayMetrics.density
-                    val sparkHeight = 18.dp
-                    Spacer(GlanceModifier.height(4.dp))
+                    // 종가 줄이 들어가면 그 높이만큼 작은 차트를 줄여 타일 높이를 다른 타일과 같게 둔다
+                    val sparkHeight = if (afterClose != null) 8.dp else 18.dp
+                    Spacer(GlanceModifier.height(if (afterClose != null) 2.dp else 4.dp))
                     // 큰 오늘 차트처럼 장 시작~끝 중 받은 시각까지만 그린다. 장 시간을 믿을 수 없으면 가로 전체로 늘린다.
                     // 아직 점이 모자라면 타일 높이만 맞춘다.
                     if (quote.intraday.size >= 2) {
@@ -617,7 +629,14 @@ private fun ChartPanel(
     val logChart = if (logScale && period.supportsLog) logChartFor(values) else null
     val axisLabel: (Double) -> String = if (logChart != null) ::formatPowerOfTen else ::formatPrice
     val priceValues = logChart?.values ?: values
-    val priceBaseline = if (logChart != null) 0.0 else baseline
+    // 합친 차트의 가로 점선은 등락 기준(마감 뒤엔 종가)이 아니라 가장 최근 정규장의 전일종가다. 없으면(옛 캐시) 기준선.
+    val lineValue = combined?.prev_close?.takeIf { it > 0 } ?: baseline
+    val priceBaseline = if (logChart != null) 0.0 else lineValue
+    val lineLabel = when {
+        combined != null -> "전일종가 ${formatPrice(lineValue)}"
+        today -> "전일 ${formatPrice(baseline)}"
+        else -> "시작 ${formatPrice(baseline)}"
+    }
     // renderLine이 스스로 정하는 축과 같다(값 + 기준값). 숫자 칸 폭을 미리 재려고 먼저 구한다.
     val priceAxis = logChart?.axis ?: yAxisFor(priceValues + priceBaseline)
     val underwaterAxis = if (showUnderwater) drawdown?.let { yAxisFor(it.depths + 0.0) } else null
@@ -639,7 +658,7 @@ private fun ChartPanel(
     val bitmap = detailBitmap(
         priceValues, color, bw, priceBh, scale, density,
         priceBaseline,
-        "${if (today) "전일" else "시작"} ${formatPrice(baseline)}",
+        lineLabel,
         axisLabel, null, priceAxis,
         xTicks = xAxis.ticks,
         xPositions = xAxis.positions,
@@ -649,7 +668,11 @@ private fun ChartPanel(
         dots = dots,
         breaks = combined?.breaks.orEmpty(),
         bands = combined?.let(::combinedBands).orEmpty(),
+        vline = combined?.let(::combinedCloseLine),
+        vlineLabel = combined?.let { "장마감 ${formatPrice(it.close_price)}" }.orEmpty(),
     )
+    // 마감 뒤(다음 개장 전)면 머리줄 등락이 종가 대비 "마감 후"이고, 둘째 줄 앞에 종가와 그 등락률을 쓴다
+    val afterClose = combined?.takeIf { it.afterClose }
     val episodeText = drawdown?.let { formatEpisode(chartDates(quote, period), it.episode, period) }
     // 비교 안내. 고르는 중, 오늘 기간, 날짜를 맞출 수 없을 때 최저·최고 줄 자리에 쓴다.
     val compareNotice = when {
@@ -679,7 +702,7 @@ private fun ChartPanel(
             Spacer(GlanceModifier.defaultWeight())
             Box(modifier = GlanceModifier.background(tint).cornerRadius(6.dp).padding(horizontal = 6.dp, vertical = 2.dp)) {
                 Text(
-                    "${formatChangeBadge(changePct)} (${formatSignedAmount(change)})",
+                    (if (afterClose != null) "마감 후 " else "") + "${formatChangeBadge(changePct)} (${formatSignedAmount(change)})",
                     style = style(color, 11, bold = true),
                 )
             }
@@ -688,7 +711,8 @@ private fun ChartPanel(
             Text(compareNotice, style = style(COMPARE_LINE, 10), maxLines = 1)
         } else {
             Text(
-                "최저 ${formatPrice(summary.min)}  ·  최고 ${formatPrice(summary.max)}" + if (auto) "" else "  ·  누르면 닫기",
+                afterClose?.let { formatCloseSummary(it) + "  ·  " }.orEmpty() +
+                    "최저 ${formatPrice(summary.min)}  ·  최고 ${formatPrice(summary.max)}" + if (auto) "" else "  ·  누르면 닫기",
                 style = style(SUBTLE, 10),
             )
         }
@@ -821,6 +845,8 @@ private fun detailBitmap(
     dots: List<Pair<Int, Int>> = emptyList(),
     breaks: List<Int> = emptyList(),
     bands: List<ClosedFloatingPointRange<Float>> = emptyList(),
+    vline: Float? = null,
+    vlineLabel: String = "",
 ): Bitmap {
     return renderLine(
         values = values,
@@ -851,6 +877,8 @@ private fun detailBitmap(
         breaks = breaks,
         bands = bands,
         bandColor = SESSION_BAND.toArgb(),
+        vline = vline,
+        vlineLabel = vlineLabel,
     )
 }
 
