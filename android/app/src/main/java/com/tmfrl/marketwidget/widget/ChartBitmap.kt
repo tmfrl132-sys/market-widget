@@ -171,7 +171,11 @@ fun renderLine(
             drawBaselineLabel(canvas, baselineLabel, baseline, values.last(), axis, text, backgroundColor, plotW, plotH, pad)
         }
         drawMarks(canvas, marks.filter { (i, _) -> i in points.indices }, points, text, backgroundColor, plotW, strokePx)
-        if (vlineX != null && vlineLabel.isNotEmpty()) drawVlineLabel(canvas, vlineLabel, vlineX, text, backgroundColor, plotW)
+        if (vlineX != null && vlineLabel.isNotEmpty()) {
+            // 점선 문구가 위쪽 절반에 있으면 겹치지 않게 아래쪽에 둔다
+            val baselineY = if (axis != null && baseline != null) yPosition(baseline, axis.min, axis.max, plotH, pad) else plotH
+            drawVlineLabel(canvas, vlineLabel, vlineX, text, backgroundColor, plotW, top = baselineY >= plotH / 2, plotH = plotH)
+        }
         if (showXLabels) {
             val baselineY = h - textPx * X_BAND_BOTTOM_LINES
             xLabels.forEach { label -> canvas.drawText(label.text, label.left, baselineY, text) }
@@ -283,13 +287,15 @@ private fun drawBaseline(
     })
 }
 
-/** 세로 점선 문구. 그림 위쪽, 선 왼쪽에 두고 왼쪽 자리가 모자라면 오른쪽에 둔다. */
-private fun drawVlineLabel(canvas: Canvas, label: String, x: Float, text: Paint, backgroundColor: Int, plotW: Float) {
+/** 세로 점선 문구. 선 왼쪽에 두고 왼쪽 자리가 모자라면 오른쪽에 둔다. top이면 그림 위쪽, 아니면 아래쪽이다. */
+private fun drawVlineLabel(
+    canvas: Canvas, label: String, x: Float, text: Paint, backgroundColor: Int, plotW: Float, top: Boolean, plotH: Float,
+) {
     val size = text.textSize
     val width = text.measureText(label)
     val gap = size * 0.3f
     val left = (if (x - gap - width >= 0f) x - gap - width else x + gap).coerceIn(0f, (plotW - width).coerceAtLeast(0f))
-    val textY = size * 1.1f
+    val textY = if (top) size * 1.1f else (plotH - size * 0.4f).coerceAtLeast(size)
     canvas.drawRect(left - size * 0.2f, textY - size, left + width + size * 0.2f, textY + size * 0.25f, Paint().apply { color = backgroundColor })
     canvas.drawText(label, left, textY, text)
 }

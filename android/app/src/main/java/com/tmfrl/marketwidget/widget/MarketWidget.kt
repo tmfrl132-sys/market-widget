@@ -483,7 +483,8 @@ private fun QuoteTile(
     val afterClose = afterCloseChartFor(quote)
     val shownPct = afterClose?.change_pct ?: quote.change_pct
     val (color, tint) = trendColors(shownPct)
-    val accent = when (bigMoveTrend(quote)) {
+    // 큰 움직임 강조는 정규장 등락 기준이라, 마감 후 등락을 보일 때는 색과 부호가 어긋나지 않게 끈다
+    val accent = if (afterClose != null) null else when (bigMoveTrend(quote)) {
         Trend.UP -> UP
         Trend.DOWN -> DOWN
         else -> null
@@ -633,6 +634,8 @@ private fun ChartPanel(
     val lineValue = combined?.prev_close?.takeIf { it > 0 } ?: baseline
     val priceBaseline = if (logChart != null) 0.0 else lineValue
     val lineLabel = when {
+        // 전일종가가 없는 옛 캐시의 마감 후 기준선은 그날 종가다
+        combined != null && combined.prev_close <= 0 && combined.afterClose -> "종가 ${formatPrice(lineValue)}"
         combined != null -> "전일종가 ${formatPrice(lineValue)}"
         today -> "전일 ${formatPrice(baseline)}"
         else -> "시작 ${formatPrice(baseline)}"
