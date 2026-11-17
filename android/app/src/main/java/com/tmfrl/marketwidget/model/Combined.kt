@@ -37,6 +37,9 @@ private const val BAR_SECONDS = 300L
 
 private const val WINDOW_SECONDS = 24 * 3600L
 
+/** 새 창에 점이 2개 미만일 때 하루씩 뒤로 가 보는 최대 횟수(v1.3). */
+private const val MAX_WINDOW_STEPS = 7
+
 /** 시작·끝 시각(초 단위 epoch). */
 @Serializable
 data class TradingSpan(val start: Long = 0, val end: Long = 0)
@@ -150,7 +153,7 @@ private fun previousNewYorkOpen(start: Long): Long =
  * - 기준 시각 asOf = min(now, 마지막 점 + 5분).
  * - 창(v1.3, 고정): 시작 = asOf 이하에서 가장 최근의 뉴욕 09:30, 끝 = 시작 + 24시간. 점은 [시작, min(asOf, 끝)] 안의 것만이라
  *   정규장이 열리면 왼쪽 끝부터 다시 채워지고 오른쪽은 비어 있다. 새 창에 점이 2개 미만이면(개장 직후 첫 현물 봉 전,
- *   주말) 바로 앞 뉴욕 날짜 09:30부터의 창을 쓰고, 그래도 2개 미만이면 null.
+ *   주말) 하루 앞 뉴욕 09:30부터의 창으로 최대 7번 물러나 점이 2개 이상인 가장 최근 창을 쓰고, 끝내 없으면 null.
  * - 기준선: asOf 이전에 끝난 가장 최근 정규장의 종가. 그 정규장이 자료에서 마지막 바로 앞 정규장이면(지금 장중)
  *   meta.previousClose가 그 장의 공식 종가라 그것을 쓴다. 끝난 정규장이 없으면 previousClose.
  */
@@ -180,11 +183,15 @@ fun combine24h(spot: SpotSeries, futures: FuturesSeries, now: Long): CombinedCha
         val until = minOf(asOf, from + WINDOW_SECONDS)
         return points.filter { it.time in from..until }
     }
-    val latestOpen = latestNewYorkOpen(asOf)
-    val latestWindow = pointsIn(latestOpen)
-    val useLatest = latestWindow.size >= 2
-    val start = if (useLatest) latestOpen else previousNewYorkOpen(latestOpen)
-    val window = if (useLatest) latestWindow else pointsIn(start)
+    // 점이 2개 이상인 가장 최근 창. 없으면 하루씩(뉴욕 09:30) 최대 MAX_WINDOW_STEPS번 뒤로 간다(일요일 선물 첫 봉 → 금요일 창).
+    var start = latestNewYorkOpen(asOf)
+    var window = pointsIn(start)
+    var steps = 0
+    while (window.size < 2 && steps < MAX_WINDOW_STEPS) {
+        start = previousNewYorkOpen(start)
+        window = pointsIn(start)
+        steps++
+    }
     if (window.size < 2) return null
     val end = start + WINDOW_SECONDS
 

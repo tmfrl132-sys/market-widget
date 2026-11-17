@@ -46,6 +46,10 @@ data class LiveQuote(
     val sessionEnd: Long? = null,
     // 합친 24시간 차트 재료(S&P500·나스닥100만). 갱신 때 계산에만 쓰고 캐시에 넣지 않는다.
     val combinedSource: CombinedSource? = null,
+    // v1.3. 기록(일봉·주봉·chart·전체 기간·고점·낙폭)에 쓰는 가격. 보통은 price와 같다.
+    // NXT 시세는 화면 값(price)만 NXT이고 여기에는 KRX 가격을 둔다. null이면 기록을 건드리지 않는다(KRX 봉이 아직 없는 프리마켓).
+    // 갱신 때 계산에만 쓰고 캐시에 넣지 않는다.
+    val historyPrice: Double? = price,
 )
 
 /** 오늘 봉. times는 values와 1:1인 초 단위 epoch이고, 믿을 수 없으면 비어 있다. 장 시간을 모르면 시작·끝은 null이다. */
@@ -422,6 +426,8 @@ fun nxtStockQuote(basicText: String, krxMinuteText: String, nxtMinuteText: Strin
         intradayTimes = kept.map { it.time.atZone(SEOUL).toEpochSecond() },
         sessionStart = epochAt(NXT_OPEN),
         sessionEnd = epochAt(NXT_CLOSE),
+        // 일봉·고점·낙폭은 KRX 가격만 쓴다. 그 날짜 KRX 봉이 없으면(프리마켓) 기록을 건드리지 않는다.
+        historyPrice = regular.lastOrNull()?.price,
     )
 }
 
@@ -465,7 +471,37 @@ private fun combinedAfter(quote: Quote, live: LiveQuote, now: Long?): CombinedCh
     return combine24h(source.spot, source.futures, now)
 }
 
-/** 직접 받은 시세를 덮어쓰고 차트 끝과 낙폭도 맞춘다. 받지 못한 항목은 그대로 두고, 하나도 못 받았으면 갱신 시각도 그대로 둔다. */
+/**
+ * 기록(일봉·chart·주봉·전체 기간·고점·낙폭·MDD 날짜) 끝을 가격 price로 맞춘다. prevClose는 일봉에 덧붙일지 판정하는 전일 종가다.
+ * v1.3: NXT 시세에서는 KRX 가격만 넘겨 NXT 값이 일봉 끝이나 고점·MDD에 들어가지 않게 한다.
+ */
+private fun withLatestHistory(quote: Quote, price: Double, prevClose: Double, updatedAt: String): Quote {
+    val latest = round2(price)
+    val basis = LiveQuote(price, 0.0, 0.0, prevClose)
+    val peak = quote.peak?.let { old -> maxOf(old, price) }
+    val depth = peak?.let { high -> drawdownPct(price, high) }
+    val daily = withLatestDaily(quote.daily, basis)
+    val episode = latestEpisode(quote, price, depth, updatedAt)
+    return quote.copy(
+        chart = withLatestDaily(quote.chart, basis),
+        daily = daily,
+        daily_dates = withLatestDate(quote.daily_dates, quote.daily.size, daily.size, updatedAt),
+        // 주봉은 이번 주 봉이 항상 끝에 있어 바꾸기만 한다
+        weekly = replaceLast(quote.weekly, latest),
+        max_closes = replaceLast(quote.max_closes, latest),
+        max_drawdowns = if (depth == null) quote.max_drawdowns else replaceLast(quote.max_drawdowns, round1(depth)),
+        peak = peak,
+        mdd = if (depth == null) quote.mdd else quote.mdd?.let { old -> minOf(old, round1(depth)) },
+        max_depths = if (depth == null) quote.max_depths else replaceLast(quote.max_depths, round1(depth)),
+        mdd_trough_date = episode.first,
+        mdd_recovery_date = episode.second,
+    )
+}
+
+/**
+ * 직접 받은 시세를 덮어쓰고 차트 끝과 낙폭도 맞춘다. 받지 못한 항목은 그대로 두고, 하나도 못 받았으면 갱신 시각도 그대로 둔다.
+ * 기록은 LiveQuote.historyPrice(보통 price, NXT 시세에서는 KRX 가격)로 맞추고, null이면 기록을 그대로 둔다.
+ */
 fun applyLiveQuotes(data: MarketData, live: Map<String, LiveQuote>, updatedAt: String): MarketData {
     if (live.isEmpty()) return data
     val now = parseUpdatedAt(updatedAt)?.epochSecond
@@ -474,28 +510,13 @@ fun applyLiveQuotes(data: MarketData, live: Map<String, LiveQuote>, updatedAt: S
         quotes = data.quotes.map { quote ->
             live[quote.id]?.let {
                 val latest = round2(it.price)
-                val peak = quote.peak?.let { old -> maxOf(old, it.price) }
-                val depth = peak?.let { high -> drawdownPct(it.price, high) }
-                val daily = withLatestDaily(quote.daily, it)
                 // 오늘 봉을 못 받았으면 값, 시각, 장 시간을 모두 이전 것으로 유지한다
                 val keepIntraday = it.intraday.isEmpty()
-                val episode = latestEpisode(quote, it.price, depth, updatedAt)
-                quote.copy(
+                val history = it.historyPrice?.let { price -> withLatestHistory(quote, price, it.prevClose, updatedAt) } ?: quote
+                history.copy(
                     price = it.price,
                     change = it.change,
                     change_pct = it.changePct,
-                    chart = withLatestDaily(quote.chart, it),
-                    daily = daily,
-                    daily_dates = withLatestDate(quote.daily_dates, quote.daily.size, daily.size, updatedAt),
-                    // 주봉은 이번 주 봉이 항상 끝에 있어 바꾸기만 한다
-                    weekly = replaceLast(quote.weekly, latest),
-                    max_closes = replaceLast(quote.max_closes, latest),
-                    max_drawdowns = if (depth == null) quote.max_drawdowns else replaceLast(quote.max_drawdowns, round1(depth)),
-                    peak = peak,
-                    mdd = if (depth == null) quote.mdd else quote.mdd?.let { old -> minOf(old, round1(depth)) },
-                    max_depths = if (depth == null) quote.max_depths else replaceLast(quote.max_depths, round1(depth)),
-                    mdd_trough_date = episode.first,
-                    mdd_recovery_date = episode.second,
                     intraday = if (keepIntraday) quote.intraday else replaceLast(it.intraday, latest),
                     intraday_times = if (keepIntraday) quote.intraday_times else it.intradayTimes,
                     session_start = if (keepIntraday) quote.session_start else it.sessionStart,

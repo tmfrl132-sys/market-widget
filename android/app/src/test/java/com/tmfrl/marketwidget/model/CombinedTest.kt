@@ -642,10 +642,28 @@ class CombinedTest {
         assertEquals(0L, chart.close_time)
     }
 
-    @Test fun weekend_sundayFuturesFirstBarAloneIsNull() {
-        // 일 18:02: 새 창에 점 1개, 직전 창(토 09:30~일 09:30)은 비어 있다
+    @Test fun weekend_sundayFuturesFirstBarAloneFallsBackToFridayWindow() {
+        // QA D2. 일 18:02: 새 창(일 09:30~)에 점 1개, 토 09:30 창은 0개 → 하루 더 물러나 금 09:30 창
         val futures = FuturesSeries(weekendFutures.filter { it.time <= ny("2026-11-15", "18:00") })
-        assertNull(combine24h(fridaySpot, futures, ny("2026-11-15", "18:02")))
+        val chart = combine24h(fridaySpot, futures, ny("2026-11-15", "18:02"))!!
+        assertEquals(ny("2026-11-13", "09:30"), chart.start)
+        assertEquals(ny("2026-11-14", "09:30"), chart.end)
+        assertEquals(90, chart.values.size)
+        assertEquals(ny("2026-11-13", "16:55"), chart.times.last())
+        assertEquals(100.0, chart.price, 0.0)
+        assertTrue(chart.afterClose)
+        assertEquals(ny("2026-11-13", "16:00"), chart.close_time)
+    }
+
+    @Test fun fallback_goesBackAtMostSevenDays() {
+        // 점이 2개 이상인 창이 7일 전(금 11/6)이면 찾고, 8일 전(목 11/5)이면 null
+        val latest = SpotBar(ny("2026-11-13", "10:00"), 101.0)
+        val sevenDaysAgo = SpotSeries(spotBars("2026-11-06", "09:30", "16:00") { 100.0 } + latest, previousClose = 99.0)
+        val chart = combine24h(sevenDaysAgo, FuturesSeries(emptyList()), ny("2026-11-13", "10:30"))!!
+        assertEquals(ny("2026-11-06", "09:30"), chart.start)
+        assertEquals(79, chart.values.size)
+        val eightDaysAgo = SpotSeries(spotBars("2026-11-05", "09:30", "16:00") { 100.0 } + latest, previousClose = 99.0)
+        assertNull(combine24h(eightDaysAgo, FuturesSeries(emptyList()), ny("2026-11-13", "10:30")))
     }
 
     @Test fun dst_windowStartsAt2230Seoul() {
