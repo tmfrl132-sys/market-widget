@@ -88,11 +88,37 @@ class LayoutTest {
         assertEquals(60f, widgetLayout(238f, 2, hasEvents = true).detailHeightDp, 0f)
     }
 
-    @Test fun widgetLayout_lineOnlyWhenChartDoesNotFit() {
-        val layout = widgetLayout(237f, 2, hasEvents = true)
+    @Test fun widgetLayout_chartThresholdStaysV13WithEvents() {
+        for (rows in 1..4) {
+            val threshold = detailMinHeightDp(rows)
+            assertEquals(true, widgetLayout(threshold, rows, hasEvents = true).showDetail)
+            assertEquals(false, widgetLayout(threshold - 1f, rows, hasEvents = true).showDetail)
+        }
+    }
+
+    @Test fun widgetLayout_eventsNeverChangeChartVisibility() {
+        for (rows in 1..4) for (height in 100..600) {
+            assertEquals(
+                widgetLayout(height.toFloat(), rows, hasEvents = false).showDetail,
+                widgetLayout(height.toFloat(), rows, hasEvents = true).showDetail,
+            )
+        }
+    }
+
+    @Test fun widgetLayout_boundaryBandKeepsChartAndHidesLine() {
+        // QA 재현 크기: 타일 3줄, 높이 310dp. v1.3에서 작은 차트가 보이던 구간이다
+        assertEquals(WidgetLayout(showEventLine = false, showDetail = true, detailHeightDp = 60f), widgetLayout(310f, 3, hasEvents = true))
+        assertEquals(WidgetLayout(showEventLine = false, showDetail = true, detailHeightDp = 60f), widgetLayout(322f, 3, hasEvents = true))
+        assertEquals(true, widgetLayout(323f, 3, hasEvents = true).showEventLine)
+        assertEquals(false, widgetLayout(237f, 2, hasEvents = true).showEventLine)
+        assertEquals(true, widgetLayout(237f, 2, hasEvents = true).showDetail)
+    }
+
+    @Test fun widgetLayout_lineOnlyBelowChartThresholdWhenTilesFit() {
+        val layout = widgetLayout(300f, 3, hasEvents = true)
         assertEquals(true, layout.showEventLine)
         assertEquals(false, layout.showDetail)
-        assertEquals(true, widgetLayout(220f, 2, hasEvents = true).showEventLine)
+        assertEquals(false, widgetLayout(294f, 3, hasEvents = true).showEventLine)
     }
 
     @Test fun widgetLayout_hidesLineWhenTilesWouldBeCut() {
@@ -103,15 +129,30 @@ class LayoutTest {
     }
 
     @Test fun widgetLayout_oneRowKeepsChartWhenLineDoesNotFit() {
-        // 한 줄 타일은 줄만 놓을 높이(145)보다 차트 기준(135)이 낮아, 그 사이에서는 기존처럼 차트를 둔다
+        // 한 줄 타일은 차트 기준이 135dp이고, 줄은 153dp부터 함께 놓인다
         val layout = widgetLayout(140f, 1, hasEvents = true)
         assertEquals(false, layout.showEventLine)
         assertEquals(true, layout.showDetail)
-        assertEquals(true, widgetLayout(145f, 1, hasEvents = true).showEventLine)
+        assertEquals(false, widgetLayout(152f, 1, hasEvents = true).showEventLine)
+        assertEquals(true, widgetLayout(153f, 1, hasEvents = true).showEventLine)
+    }
+
+    @Test fun widgetLayoutFor_usesRowsFromWidth() {
+        assertEquals(widgetLayout(310f, 3, hasEvents = true), widgetLayoutFor(480f, 310f, 11, hasEvents = true))
+        assertEquals(widgetLayout(310f, 2, hasEvents = true), widgetLayoutFor(712f, 310f, 11, hasEvents = true))
+    }
+
+    @Test fun orientedSize_followsGlanceExactRule() {
+        assertEquals(800f to 300f, orientedWidgetSizeDp(landscape = true, minWidth = 500, maxWidth = 800, minHeight = 300, maxHeight = 520))
+        assertEquals(500f to 520f, orientedWidgetSizeDp(landscape = false, minWidth = 500, maxWidth = 800, minHeight = 300, maxHeight = 520))
+    }
+
+    @Test fun orientedSize_unknownIsNull() {
+        assertEquals(null, orientedWidgetSizeDp(landscape = true, minWidth = 0, maxWidth = 0, minHeight = 0, maxHeight = 0))
     }
 
     @Test fun eventListRows_staysWithinGlanceChildLimit() {
-        assertEquals(3, eventListRows(availableDp = 30f, rowDp = 24f))
+        assertEquals(2, eventListRows(availableDp = 30f, rowDp = 24f))
         assertEquals(5, eventListRows(availableDp = 120f, rowDp = 24f))
         assertEquals(8, eventListRows(availableDp = 960f, rowDp = 24f))
     }

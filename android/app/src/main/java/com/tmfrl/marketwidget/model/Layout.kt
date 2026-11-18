@@ -75,19 +75,33 @@ private const val MIN_DETAIL_DP = 60f
 data class WidgetLayout(val showEventLine: Boolean, val showDetail: Boolean, val detailHeightDp: Float)
 
 /**
- * 일정 줄과 차트 칸을 놓을지 정한다. 우선순위는 줄과 차트 모두, 줄만, 차트만, 타일만 순서다.
- * 타일이 잘릴 만큼 낮으면 줄을 숨겨 시세를 지킨다.
+ * 일정 줄과 차트 칸을 놓을지 정한다. 차트 칸과 작은 차트의 기준은 일정 유무와 상관없이 v1.3과 같고,
+ * 일정 줄은 그 배치를 지키고도 높이가 남을 때만 보인다.
  */
 fun widgetLayout(heightDp: Float, rows: Int, hasEvents: Boolean): WidgetLayout {
-    val lineOnlyMin = HEADER_PART_DP + EVENT_LINE_HEIGHT_DP + COMPACT_TILE_ROW_DP * rows
-    val showLine = hasEvents && (heightDp >= detailMinHeightDp(rows, eventLine = true) || heightDp >= lineOnlyMin)
-    val showDetail = heightDp >= detailMinHeightDp(rows, eventLine = showLine)
+    val showDetail = heightDp >= detailMinHeightDp(rows)
+    val lineMin = if (showDetail) detailMinHeightDp(rows, eventLine = true) else HEADER_PART_DP + EVENT_LINE_HEIGHT_DP + COMPACT_TILE_ROW_DP * rows
+    val showLine = hasEvents && heightDp >= lineMin
     return WidgetLayout(showLine, showDetail, maxOf(MIN_DETAIL_DP, heightDp - topPartHeightDp(rows, showLine)))
+}
+
+/** 위젯 폭으로 타일 줄 수를 구해 배치를 정한다. 화면을 그리지 않는 액션에서 쓴다. */
+fun widgetLayoutFor(widthDp: Float, heightDp: Float, quoteCount: Int, hasEvents: Boolean): WidgetLayout =
+    widgetLayout(heightDp, tileGrid(widthDp, quoteCount).rows, hasEvents)
+
+/**
+ * 지금 방향의 위젯 크기(폭, 높이 dp). Glance가 SizeMode.Exact로 그리는 크기와 같은 규칙으로
+ * 가로 방향은 최대 폭·최소 높이, 세로 방향은 최소 폭·최대 높이다. 크기를 모르면 null이다.
+ */
+fun orientedWidgetSizeDp(landscape: Boolean, minWidth: Int, maxWidth: Int, minHeight: Int, maxHeight: Int): Pair<Float, Float>? {
+    val width = if (landscape) maxWidth else minWidth
+    val height = if (landscape) minHeight else maxHeight
+    return if (width <= 0 || height <= 0) null else width.toFloat() to height.toFloat()
 }
 
 /** 일정 목록의 제목·간격을 뺀 줄 수 한도. Glance는 Column 하나에 자식을 10개까지만 그린다. */
 private const val MAX_EVENT_LIST_ROWS = 8
 
-/** 차트 자리에 보일 일정 목록 줄 수. 높이에 맞추되 Glance 한도를 넘지 않는다. */
+/** 차트 자리에 보일 일정 목록 줄 수. 높이에 맞추되 Glance 한도를 넘지 않고, 가장 가까운 일정과 "외 N건"을 놓을 2줄은 남긴다. */
 fun eventListRows(availableDp: Float, rowDp: Float): Int =
-    minOf(eventRows(availableDp, rowDp, min = 3), MAX_EVENT_LIST_ROWS)
+    minOf(eventRows(availableDp, rowDp, min = 2), MAX_EVENT_LIST_ROWS)

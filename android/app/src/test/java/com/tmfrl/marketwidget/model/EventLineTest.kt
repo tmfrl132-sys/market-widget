@@ -160,10 +160,64 @@ class EventLineTest {
         assertFalse(afterEventLineTap(open = false, selected = null))
     }
 
-    @Test fun listOpen_closedWhenNoUpcomingEvents() {
-        assertTrue(eventListOpen(stored = true, hasUpcoming = true))
-        assertFalse(eventListOpen(stored = true, hasUpcoming = false))
-        assertFalse(eventListOpen(stored = false, hasUpcoming = true))
+    @Test fun listVisible_needsStoredLineAndDetail() {
+        assertTrue(eventListVisible(true, WidgetLayout(showEventLine = true, showDetail = true, detailHeightDp = 100f)))
+        assertFalse(eventListVisible(false, WidgetLayout(showEventLine = true, showDetail = true, detailHeightDp = 100f)))
+        assertFalse(eventListVisible(true, WidgetLayout(showEventLine = false, showDetail = true, detailHeightDp = 100f)))
+        assertFalse(eventListVisible(true, WidgetLayout(showEventLine = true, showDetail = false, detailHeightDp = 60f)))
+    }
+
+    @Test fun listVisible_falseAfterWidgetShrinks() {
+        // QA 재현: 타일 2줄, 300dp에서 연 목록은 230dp로 줄면 보이지 않아 자동 순환이 돌아야 한다
+        assertTrue(eventListVisible(true, widgetLayoutFor(712f, 300f, 8, hasEvents = true)))
+        assertFalse(eventListVisible(true, widgetLayoutFor(712f, 230f, 8, hasEvents = true)))
+    }
+
+    @Test fun listVisible_falseWithoutUpcomingEvents() {
+        assertFalse(eventListVisible(true, widgetLayoutFor(712f, 300f, 8, hasEvents = false)))
+    }
+
+    @Test fun tileTap_hiddenListBehavesLikeNormalTap() {
+        // QA L5: 보이지 않는 목록이 남아 있어도 차트 타일을 누르면 평소처럼 차트가 닫힌다
+        val listOpen = eventListVisible(true, widgetLayout(140f, 1, hasEvents = true))
+        assertEquals(ChartSelection(), tileTapSelection(ChartSelection("KS11"), "KS11", auto = false, listOpen = listOpen))
+    }
+
+    @Test fun soonEvent_onlyTodayAndTomorrow() {
+        assertTrue(isSoonEvent(today, today))
+        assertTrue(isSoonEvent(today.plusDays(1), today))
+        assertFalse(isSoonEvent(today.plusDays(2), today))
+        assertFalse(isSoonEvent(today.minusDays(1), today))
+    }
+
+    private val sixEvents = (20..25).map { us("2026-11-$it", "미국 지표$it") }
+
+    @Test fun listPage_allFitWithoutMoreRow() {
+        val page = eventListPage(sixEvents, today, rows = 6)
+        assertEquals(6, page.events.size)
+        assertEquals(null, page.more)
+    }
+
+    @Test fun listPage_lastRowCountsHiddenEvents() {
+        val page = eventListPage(sixEvents, today, rows = 5)
+        assertEquals(listOf("미국 지표20", "미국 지표21", "미국 지표22", "미국 지표23"), page.events.map { it.title })
+        assertEquals("외 2건", page.more)
+    }
+
+    @Test fun listPage_smallestListKeepsNearestEvent() {
+        val page = eventListPage(sixEvents, today, rows = 2)
+        assertEquals(listOf("미국 지표20"), page.events.map { it.title })
+        assertEquals("외 5건", page.more)
+    }
+
+    @Test fun listPage_dropsPastEventsBeforeCounting() {
+        val page = eventListPage(listOf(us("2026-11-01", "미국 CPI")) + sixEvents.take(2), today, rows = 2)
+        assertEquals(2, page.events.size)
+        assertEquals(null, page.more)
+    }
+
+    @Test fun listPage_emptyWithoutEvents() {
+        assertEquals(EventListPage(emptyList(), null), eventListPage(emptyList(), today, rows = 3))
     }
 
     @Test fun tileTap_withListOpenOpensTappedChart() {
@@ -176,6 +230,20 @@ class EventLineTest {
         assertEquals(
             ChartSelection("KS11", "NDX"),
             tileTapSelection(ChartSelection("KS11", "NDX"), "KS11", auto = false, listOpen = true),
+        )
+    }
+
+    @Test fun tileTap_withListOpenKeepsCompareTarget() {
+        assertEquals(
+            ChartSelection("BTC", "NDX"),
+            tileTapSelection(ChartSelection("KS11", "NDX"), "BTC", auto = false, listOpen = true),
+        )
+    }
+
+    @Test fun tileTap_withListOpenCompareTargetBecomesSingleChart() {
+        assertEquals(
+            ChartSelection("NDX"),
+            tileTapSelection(ChartSelection("KS11", "NDX"), "NDX", auto = false, listOpen = true),
         )
     }
 

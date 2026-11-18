@@ -1,6 +1,8 @@
 package com.tmfrl.marketwidget.widget
 
+import android.appwidget.AppWidgetManager
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
@@ -56,7 +58,7 @@ import com.tmfrl.marketwidget.data.Repository
 import com.tmfrl.marketwidget.data.SettingsStore
 import com.tmfrl.marketwidget.model.ChartSelection
 import com.tmfrl.marketwidget.model.CompareSeries
-import com.tmfrl.marketwidget.model.Event
+import com.tmfrl.marketwidget.model.EventListPage
 import com.tmfrl.marketwidget.model.MarketData
 import com.tmfrl.marketwidget.model.MarketState
 import com.tmfrl.marketwidget.model.MarketStatus
@@ -113,7 +115,6 @@ import com.tmfrl.marketwidget.model.nextAutoQuote
 import com.tmfrl.marketwidget.model.tileGrid
 import com.tmfrl.marketwidget.model.trendOf
 import com.tmfrl.marketwidget.work.AutoTick
-import com.tmfrl.marketwidget.model.upcomingEvents
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.ZonedDateTime
@@ -135,7 +136,11 @@ import com.tmfrl.marketwidget.model.eventDays
 import com.tmfrl.marketwidget.model.eventDaysFitting
 import com.tmfrl.marketwidget.model.eventLineText
 import com.tmfrl.marketwidget.model.eventLineWidthDp
-import com.tmfrl.marketwidget.model.eventListOpen
+import com.tmfrl.marketwidget.model.eventListPage
+import com.tmfrl.marketwidget.model.eventListVisible
+import com.tmfrl.marketwidget.model.isSoonEvent
+import com.tmfrl.marketwidget.model.orientedWidgetSizeDp
+import com.tmfrl.marketwidget.model.widgetLayoutFor
 import com.tmfrl.marketwidget.model.eventListRows
 import com.tmfrl.marketwidget.model.tileTapSelection
 import com.tmfrl.marketwidget.model.widgetLayout
@@ -178,6 +183,7 @@ private val COMPARE_LINE = Color(0xFFFBBF24)
 
 /** 오늘·내일 일정 강조. 빨강·파랑은 등락 뜻이라 팔레트의 호박색을 함께 쓴다. */
 private val EVENT_SOON = COMPARE_LINE
+private val EVENT_SOON_TINT = Color(0x33FBBF24)
 
 /** 비교 차트의 기준값. 공통 시작일 값을 100으로 둔다. */
 private const val COMPARE_BASE = 100.0
@@ -239,6 +245,24 @@ private fun visibleQuotesFor(context: Context): List<Quote> = widgetData(context
 private fun hasUpcomingEvents(context: Context): Boolean {
     val events = Repository.forContext(context).cached()?.events.orEmpty()
     return eventDays(events, seoulToday(ZonedDateTime.now())).isNotEmpty()
+}
+
+/**
+ * 일정 목록이 지금 이 위젯에 실제로 보이는지. 크기가 줄거나 화면을 돌려 목록을 그릴 수 없으면 false다.
+ * 크기를 알 수 없어도 false라, 자동 순환이 멈춘 채로 남지 않는다.
+ */
+private fun eventListShowing(context: Context, glanceId: GlanceId, stored: Boolean, quoteCount: Int): Boolean {
+    if (!stored) return false
+    val appWidgetId = GlanceAppWidgetManager(context).getAppWidgetId(glanceId)
+    val options = AppWidgetManager.getInstance(context).getAppWidgetOptions(appWidgetId)
+    val (width, height) = orientedWidgetSizeDp(
+        landscape = context.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE,
+        minWidth = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH),
+        maxWidth = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH),
+        minHeight = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT),
+        maxHeight = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT),
+    ) ?: return false
+    return eventListVisible(stored, widgetLayoutFor(width, height, quoteCount, hasUpcomingEvents(context)))
 }
 
 class MarketWidget : GlanceAppWidget() {
@@ -321,11 +345,11 @@ class SelectQuoteAction : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
         val tapped = parameters[QUOTE_ID] ?: return
         val visible = visibleQuotesFor(context).map { it.id }
-        val hasUpcoming = hasUpcomingEvents(context)
         var auto = false
         updateAppWidgetState(context, glanceId) { prefs ->
             auto = prefs[AUTO] == true
-            val listOpen = eventListOpen(prefs[EVENTS_OPEN] == true, hasUpcoming)
+            // 보이지 않는 목록은 열리지 않은 것으로 봐서 첫 탭이 평소처럼 동작한다
+            val listOpen = eventListShowing(context, glanceId, prefs[EVENTS_OPEN] == true, visible.size)
             prefs.setSelection(tileTapSelection(sanitizeSelection(prefs.selection(), visible), tapped, auto, listOpen))
             prefs.setEventsOpen(false)
         }
@@ -359,7 +383,7 @@ class ToggleAutoAction : ActionCallback {
     }
 }
 
-/** 자동모드인 위젯을 다음 종목으로 넘긴다. 일정 목록을 열어 둔 위젯은 넘기지 않는다. 홈 화면에 위젯이 하나라도 있는지 돌려준다. */
+/** 자동모드인 위젯을 다음 종목으로 넘긴다. 일정 목록이 화면에 보이는 위젯은 넘기지 않는다. 홈 화면에 위젯이 하나라도 있는지 돌려준다. */
 suspend fun advanceAutoWidgets(context: Context): Boolean {
     // 자동모드가 꺼져 있으면 파일을 읽지 않는다. 이 함수는 화면이 켜져 있는 동안 1분마다 불린다.
     val quotes by lazy { visibleQuotesFor(context) }
@@ -368,12 +392,15 @@ suspend fun advanceAutoWidgets(context: Context): Boolean {
     ids.forEach { id ->
         var advanced = false
         updateAppWidgetState(context, id) { prefs ->
-            // 일정이 모두 지나 줄이 사라졌으면 목록을 닫을 방법이 없으니 열림 상태를 지우고 순환을 잇는다
-            if (prefs[AUTO] == true && !(prefs[EVENTS_OPEN] == true && hasUpcoming)) {
-                advanced = true
-                prefs.setEventsOpen(false)
-                val next = nextAutoQuote(prefs[SELECTED], autoQuoteIds(quotes, parsePeriod(prefs[PERIOD])))
-                if (next != null) prefs[SELECTED] = next
+            if (prefs[AUTO] == true) {
+                val stored = prefs[EVENTS_OPEN] == true
+                // 일정이 모두 지나면 열림 상태를 지운다. 크기 때문에 안 보일 때는 남겨 두어 크기가 돌아오면 다시 보인다.
+                if (stored && !hasUpcoming) prefs.setEventsOpen(false)
+                if (!eventListShowing(context, id, stored, quotes.size)) {
+                    advanced = true
+                    val next = nextAutoQuote(prefs[SELECTED], autoQuoteIds(quotes, parsePeriod(prefs[PERIOD])))
+                    if (next != null) prefs[SELECTED] = next
+                }
             }
         }
         if (advanced) MarketWidget().update(context, id)
@@ -466,7 +493,7 @@ private fun QuotesAndDetail(
             // 시세 줄 아래 남는 높이를 모두 차트·일정이 쓴다
             val detailHeight = layout.detailHeightDp.dp
             // 일정 목록을 열어 두면 고른 지표가 있어도 아래 목록 분기로 간다. 줄이 숨겨진 크기에서는 닫을 수 없어 열지 않는다.
-            val listOpen = eventListOpen(eventsOpen, layout.showEventLine)
+            val listOpen = eventListVisible(eventsOpen, layout)
             val chosen = if (listOpen) null else data.quotes.firstOrNull { it.id == selection.selected }
             if (chosen != null && (chartValues(chosen, period).size >= 2 || combinedChartFor(chosen, period) != null)) {
                 // 자동모드에서는 비교하지 않는다
@@ -489,7 +516,7 @@ private fun QuotesAndDetail(
                 val rows = eventListRows(detailHeight.value - 20f, EVENT_ROW_HEIGHT.value)
                 // 제목·간격과 일정 줄을 한 Column에 묶어 바깥 Column의 자식 수가 늘지 않게 한다
                 Column(modifier = GlanceModifier.fillMaxWidth().defaultWeight()) {
-                    EventList(upcomingEvents(data.events, today, limit = rows), today)
+                    EventList(eventListPage(data.events, today, rows), today)
                 }
             }
         }
@@ -1020,32 +1047,35 @@ private fun PeriodSelector(current: Period, logScale: Boolean, compareButton: Co
 }
 
 @Composable
-private fun EventList(events: List<Event>, today: LocalDate) {
+private fun EventList(page: EventListPage, today: LocalDate) {
     Text("다가오는 발표", style = style(SUBTLE, 10, bold = true))
     Spacer(GlanceModifier.height(4.dp))
-    if (events.isEmpty()) {
+    if (page.events.isEmpty() && page.more == null) {
         Text("한 달 안에 예정된 발표가 없습니다", style = style(SUBTLE, 12))
     }
-    events.forEach { event ->
+    page.events.forEach { event ->
         val date = LocalDate.parse(event.date)
-        val isToday = date == today
+        // 오늘·내일은 일정 줄과 같은 호박색이다. 빨강·파랑은 등락 전용이다.
+        val soon = isSoonEvent(date, today)
         Row(
             modifier = GlanceModifier.fillMaxWidth().padding(vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
                 modifier = GlanceModifier.width(40.dp)
-                    .background(if (isToday) UP_TINT else TILE)
+                    .background(if (soon) EVENT_SOON_TINT else TILE)
                     .cornerRadius(6.dp)
                     .padding(vertical = 2.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(formatDday(date, today), style = style(if (isToday) UP else TEXT, 10, bold = true))
+                Text(formatDday(date, today), style = style(if (soon) EVENT_SOON else TEXT, 10, bold = true))
             }
             Spacer(GlanceModifier.width(8.dp))
-            Text("${flagOf(event.country)} ${event.title}", style = style(TEXT, 12, bold = isToday), maxLines = 1)
+            Text("${flagOf(event.country)} ${event.title}", style = style(TEXT, 12, bold = soon), maxLines = 1)
             Spacer(GlanceModifier.defaultWeight())
             Text(formatEventDate(date), style = style(SUBTLE, 11))
         }
     }
+    // 자식은 제목, 간격, 일정 7줄, 이 줄까지 10개로 Glance 한도 안이다
+    page.more?.let { Text(it, style = style(SUBTLE, 11, bold = true), maxLines = 1) }
 }
