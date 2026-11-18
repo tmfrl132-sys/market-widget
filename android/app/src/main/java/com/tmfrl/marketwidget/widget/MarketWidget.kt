@@ -64,7 +64,6 @@ import com.tmfrl.marketwidget.model.Quote
 import com.tmfrl.marketwidget.model.Trend
 import com.tmfrl.marketwidget.model.afterAutoOn
 import com.tmfrl.marketwidget.model.afterCompareButton
-import com.tmfrl.marketwidget.model.afterTileTap
 import com.tmfrl.marketwidget.model.bigMoveTrend
 import com.tmfrl.marketwidget.model.chartSummary
 import com.tmfrl.marketwidget.model.combinedBands
@@ -80,7 +79,6 @@ import com.tmfrl.marketwidget.model.convertedLabel
 import com.tmfrl.marketwidget.model.compareLogChart
 import com.tmfrl.marketwidget.model.compareSeries
 import com.tmfrl.marketwidget.model.dateTicks
-import com.tmfrl.marketwidget.model.detailMinHeightDp
 import com.tmfrl.marketwidget.model.flagOf
 import com.tmfrl.marketwidget.model.chartDates
 import com.tmfrl.marketwidget.model.commonGutter
@@ -113,7 +111,6 @@ import com.tmfrl.marketwidget.model.seoulToday
 import com.tmfrl.marketwidget.model.autoQuoteIds
 import com.tmfrl.marketwidget.model.nextAutoQuote
 import com.tmfrl.marketwidget.model.tileGrid
-import com.tmfrl.marketwidget.model.topPartHeightDp
 import com.tmfrl.marketwidget.model.trendOf
 import com.tmfrl.marketwidget.work.AutoTick
 import com.tmfrl.marketwidget.model.upcomingEvents
@@ -128,7 +125,20 @@ import com.tmfrl.marketwidget.model.chartValues
 import com.tmfrl.marketwidget.model.chartXAxis
 import com.tmfrl.marketwidget.model.tileXPositions
 import com.tmfrl.marketwidget.model.parsePeriod
-import com.tmfrl.marketwidget.model.eventRows
+import com.tmfrl.marketwidget.model.EVENT_LINE_GAP_DP
+import com.tmfrl.marketwidget.model.EVENT_LINE_HEIGHT_DP
+import com.tmfrl.marketwidget.model.EVENT_LINE_LABEL
+import com.tmfrl.marketwidget.model.EVENT_LINE_SP
+import com.tmfrl.marketwidget.model.EventLineText
+import com.tmfrl.marketwidget.model.afterEventLineTap
+import com.tmfrl.marketwidget.model.eventDays
+import com.tmfrl.marketwidget.model.eventDaysFitting
+import com.tmfrl.marketwidget.model.eventLineText
+import com.tmfrl.marketwidget.model.eventLineWidthDp
+import com.tmfrl.marketwidget.model.eventListOpen
+import com.tmfrl.marketwidget.model.eventListRows
+import com.tmfrl.marketwidget.model.tileTapSelection
+import com.tmfrl.marketwidget.model.widgetLayout
 import com.tmfrl.marketwidget.model.fitBitmap
 
 private val EVENT_ROW_HEIGHT = 24.dp
@@ -166,6 +176,9 @@ private val LIVE_DOT = Color(0xFF34D399)
 /** 비교 지표 선과 비교 안내 글자. 빨강·파랑은 등락 뜻이라 선 색으로 쓰지 않는다. */
 private val COMPARE_LINE = Color(0xFFFBBF24)
 
+/** 오늘·내일 일정 강조. 빨강·파랑은 등락 뜻이라 팔레트의 호박색을 함께 쓴다. */
+private val EVENT_SOON = COMPARE_LINE
+
 /** 비교 차트의 기준값. 공통 시작일 값을 100으로 둔다. */
 private const val COMPARE_BASE = 100.0
 
@@ -191,6 +204,13 @@ private val SAVED_SELECTED = stringPreferencesKey("saved_selected")
 private val COMPARE = stringPreferencesKey("compare")
 private val COMPARE_PICKING = booleanPreferencesKey("compare_picking")
 
+/** 일정 줄을 눌러 차트 자리에 전체 일정 목록을 열었는지. 위젯마다 따로 기억한다. */
+private val EVENTS_OPEN = booleanPreferencesKey("events_open")
+
+private fun MutablePreferences.setEventsOpen(open: Boolean) {
+    if (open) this[EVENTS_OPEN] = true else remove(EVENTS_OPEN)
+}
+
 private fun MutablePreferences.setSelected(id: String?) {
     if (id == null) remove(SELECTED) else this[SELECTED] = id
 }
@@ -215,6 +235,12 @@ private fun widgetData(context: Context, settings: WidgetSettings = SettingsStor
 /** 지금 위젯에 보이는 지표. 액션에서 선택 상태를 정리할 때 쓴다. */
 private fun visibleQuotesFor(context: Context): List<Quote> = widgetData(context)?.quotes.orEmpty()
 
+/** 앞으로의 일정이 있는지. 없으면 일정 줄이 숨겨져 목록을 닫을 수 없으므로 열림 상태를 무효로 본다. */
+private fun hasUpcomingEvents(context: Context): Boolean {
+    val events = Repository.forContext(context).cached()?.events.orEmpty()
+    return eventDays(events, seoulToday(ZonedDateTime.now())).isNotEmpty()
+}
+
 class MarketWidget : GlanceAppWidget() {
     // 실제 크기로 그려야 위젯을 늘린 만큼 차트·일정 칸이 커진다
     override val sizeMode = SizeMode.Exact
@@ -230,7 +256,7 @@ class MarketWidget : GlanceAppWidget() {
             val selection = if (data == null) state.selection() else sanitizeSelection(state.selection(), data.quotes.map { it.id })
             WidgetContent(
                 data, ZonedDateTime.now(), selection, parsePeriod(state[PERIOD]),
-                state[LOG_SCALE] == true, state[AUTO] == true, settings.show_drawdown,
+                state[LOG_SCALE] == true, state[AUTO] == true, settings.show_drawdown, state[EVENTS_OPEN] == true,
             )
         }
     }
@@ -261,6 +287,21 @@ class ToggleCompareAction : ActionCallback {
     }
 }
 
+/** 일정 줄을 누르면 차트 자리에 전체 일정 목록을 열고, 다시 누르면 원래 차트로 돌아간다. */
+class ToggleEventsAction : ActionCallback {
+    override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
+        val visible = visibleQuotesFor(context).map { it.id }
+        var auto = false
+        updateAppWidgetState(context, glanceId) { prefs ->
+            auto = prefs[AUTO] == true
+            prefs.setEventsOpen(afterEventLineTap(prefs[EVENTS_OPEN] == true, sanitizeSelection(prefs.selection(), visible).selected))
+        }
+        MarketWidget().update(context, glanceId)
+        // 목록을 닫자마자 다음 지표로 넘어가지 않게 1분을 새로 센다
+        if (auto) AutoTick.schedule(context)
+    }
+}
+
 /** 모든 위젯의 상태 버전을 올리고 다시 그린다. */
 suspend fun redrawAllWidgets(context: Context) {
     val ids = GlanceAppWidgetManager(context).getGlanceIds(MarketWidget::class.java)
@@ -274,27 +315,32 @@ suspend fun redrawAllWidgets(context: Context) {
  * 시세 타일을 누르면 그 종목 차트를 보여주고, 다시 누르면 일정으로 돌아간다.
  * 비교할 타일을 고르는 중이면 그 타일이 비교 대상이 된다(afterTileTap).
  * 자동모드에서는 그 종목으로 건너뛰고, 거기서 1분을 새로 센다.
+ * 일정 목록이 열려 있으면 목록을 닫고 그 종목 차트를 연다.
  */
 class SelectQuoteAction : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
         val tapped = parameters[QUOTE_ID] ?: return
         val visible = visibleQuotesFor(context).map { it.id }
+        val hasUpcoming = hasUpcomingEvents(context)
         var auto = false
         updateAppWidgetState(context, glanceId) { prefs ->
             auto = prefs[AUTO] == true
-            prefs.setSelection(afterTileTap(sanitizeSelection(prefs.selection(), visible), tapped, auto))
+            val listOpen = eventListOpen(prefs[EVENTS_OPEN] == true, hasUpcoming)
+            prefs.setSelection(tileTapSelection(sanitizeSelection(prefs.selection(), visible), tapped, auto, listOpen))
+            prefs.setEventsOpen(false)
         }
         MarketWidget().update(context, glanceId)
         if (auto) AutoTick.schedule(context)
     }
 }
 
-/** 자동 버튼. 켜면 비교를 끄고 첫 종목부터 돌고, 끄면 켜기 전 화면으로 돌아간다. */
+/** 자동 버튼. 켜면 비교를 끄고 첫 종목부터 돌고, 끄면 켜기 전 화면으로 돌아간다. 어느 쪽이든 일정 목록은 닫는다. */
 class ToggleAutoAction : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
         val quotes = visibleQuotesFor(context)
         val visible = quotes.map { it.id }
         updateAppWidgetState(context, glanceId) { prefs ->
+            prefs.setEventsOpen(false)
             if (prefs[AUTO] == true) {
                 prefs.remove(AUTO)
                 // 켜기 전 지표가 그사이 꺼졌으면 일정 화면으로 돌아간다
@@ -313,21 +359,24 @@ class ToggleAutoAction : ActionCallback {
     }
 }
 
-/** 자동모드인 위젯을 다음 종목으로 넘긴다. 홈 화면에 위젯이 하나라도 있는지 돌려준다. */
+/** 자동모드인 위젯을 다음 종목으로 넘긴다. 일정 목록을 열어 둔 위젯은 넘기지 않는다. 홈 화면에 위젯이 하나라도 있는지 돌려준다. */
 suspend fun advanceAutoWidgets(context: Context): Boolean {
     // 자동모드가 꺼져 있으면 파일을 읽지 않는다. 이 함수는 화면이 켜져 있는 동안 1분마다 불린다.
     val quotes by lazy { visibleQuotesFor(context) }
+    val hasUpcoming by lazy { hasUpcomingEvents(context) }
     val ids = GlanceAppWidgetManager(context).getGlanceIds(MarketWidget::class.java)
     ids.forEach { id ->
-        var auto = false
+        var advanced = false
         updateAppWidgetState(context, id) { prefs ->
-            auto = prefs[AUTO] == true
-            if (auto) {
+            // 일정이 모두 지나 줄이 사라졌으면 목록을 닫을 방법이 없으니 열림 상태를 지우고 순환을 잇는다
+            if (prefs[AUTO] == true && !(prefs[EVENTS_OPEN] == true && hasUpcoming)) {
+                advanced = true
+                prefs.setEventsOpen(false)
                 val next = nextAutoQuote(prefs[SELECTED], autoQuoteIds(quotes, parsePeriod(prefs[PERIOD])))
                 if (next != null) prefs[SELECTED] = next
             }
         }
-        if (auto) MarketWidget().update(context, id)
+        if (advanced) MarketWidget().update(context, id)
     }
     return ids.isNotEmpty()
 }
@@ -349,7 +398,7 @@ private fun Dp.toPx(density: Float) = (value * density).toInt()
 @Composable
 private fun WidgetContent(
     data: MarketData?, now: ZonedDateTime, selection: ChartSelection, period: Period, logScale: Boolean, auto: Boolean,
-    showDrawdown: Boolean,
+    showDrawdown: Boolean, eventsOpen: Boolean,
 ) {
     val size = LocalSize.current
     Column(
@@ -367,7 +416,7 @@ private fun WidgetContent(
                 modifier = GlanceModifier.clickable(actionRunCallback<RefreshAction>()),
             )
         } else {
-            QuotesAndDetail(data, now, selection, period, logScale, auto, showDrawdown, size, GlanceModifier.defaultWeight())
+            QuotesAndDetail(data, now, selection, period, logScale, auto, showDrawdown, eventsOpen, size, GlanceModifier.defaultWeight())
         }
     }
 }
@@ -375,14 +424,26 @@ private fun WidgetContent(
 @Composable
 private fun QuotesAndDetail(
     data: MarketData, now: ZonedDateTime, selection: ChartSelection, period: Period, logScale: Boolean, auto: Boolean,
-    showDrawdown: Boolean, size: DpSize, modifier: GlanceModifier,
+    showDrawdown: Boolean, eventsOpen: Boolean, size: DpSize, modifier: GlanceModifier,
 ) {
     // 한 줄 칸 수는 위젯 폭으로 정하고, 줄 수가 늘면 차트·일정 칸 위쪽 높이도 그만큼 늘린다
     val grid = tileGrid(size.width.value, data.quotes.size)
-    val large = size.height.value >= detailMinHeightDp(grid.rows)
+    val today = seoulToday(now)
+    val days = eventDays(data.events, today)
+    val layout = widgetLayout(size.height.value, grid.rows, days.isNotEmpty())
+    val large = layout.showDetail
     // 장 상태는 화면의 숫자를 받은 시각 기준이다
     val asOf = parseUpdatedAt(data.updated_at)
+    // 자식은 일정 줄, 타일 묶음, 간격, 차트 자리(최대 2개)로 Glance 한도(10개) 안이다
     Column(modifier = modifier.fillMaxWidth()) {
+        if (layout.showEventLine) {
+            // 글자 크기 설정만큼 글자가 넓어지므로 폭 추정에도 반영한다
+            val fontScale = LocalContext.current.resources.configuration.fontScale
+            val available = eventLineWidthDp(size.width.value, fontScale)
+            val shown = days.take(eventDaysFitting(days, available, EVENT_LINE_SP * fontScale))
+            // 차트 칸이 없는 크기에서는 목록을 열 자리가 없어 줄만 보인다
+            EventLine(eventLineText(shown), tappable = large)
+        }
         val tileWidth = (size.width - 20.dp) / grid.perRow - 4.dp
         // 타일 줄을 한 Column에 묶는다. Glance는 Row·Column 하나에 자식을 10개까지만 그려서, 줄이 늘어도 아래 일정이 빠지지 않게 한다.
         Column(modifier = GlanceModifier.fillMaxWidth()) {
@@ -403,8 +464,10 @@ private fun QuotesAndDetail(
         if (large) {
             Spacer(GlanceModifier.height(8.dp))
             // 시세 줄 아래 남는 높이를 모두 차트·일정이 쓴다
-            val detailHeight = maxOf(60.dp, size.height - topPartHeightDp(grid.rows).dp)
-            val chosen = data.quotes.firstOrNull { it.id == selection.selected }
+            val detailHeight = layout.detailHeightDp.dp
+            // 일정 목록을 열어 두면 고른 지표가 있어도 아래 목록 분기로 간다. 줄이 숨겨진 크기에서는 닫을 수 없어 열지 않는다.
+            val listOpen = eventListOpen(eventsOpen, layout.showEventLine)
+            val chosen = if (listOpen) null else data.quotes.firstOrNull { it.id == selection.selected }
             if (chosen != null && (chartValues(chosen, period).size >= 2 || combinedChartFor(chosen, period) != null)) {
                 // 자동모드에서는 비교하지 않는다
                 val other = if (auto) null else data.quotes.firstOrNull { it.id == selection.compare && it.id != chosen.id }
@@ -423,9 +486,11 @@ private fun QuotesAndDetail(
                 // 고른 기간의 데이터가 없어도 다른 기간으로 옮길 수 있게 둔다
                 PeriodSelector(period, logScale, compareButton = null)
             } else {
-                val today = seoulToday(now)
-                val rows = eventRows(detailHeight.value - 20f, EVENT_ROW_HEIGHT.value, min = 3)
-                EventList(upcomingEvents(data.events, today, limit = rows), today)
+                val rows = eventListRows(detailHeight.value - 20f, EVENT_ROW_HEIGHT.value)
+                // 제목·간격과 일정 줄을 한 Column에 묶어 바깥 Column의 자식 수가 늘지 않게 한다
+                Column(modifier = GlanceModifier.fillMaxWidth().defaultWeight()) {
+                    EventList(upcomingEvents(data.events, today, limit = rows), today)
+                }
             }
         }
     }
@@ -463,6 +528,28 @@ private fun Header(data: MarketData?, now: ZonedDateTime, auto: Boolean) {
                 .clickable(actionRunCallback<RefreshAction>()),
         ) {
             Text("⟳", style = style(TEXT, 15, bold = true))
+        }
+    }
+}
+
+/**
+ * 머리줄 아래 일정 한 줄. 오늘·내일 일정은 언제나 앞쪽이라 글자 조각 둘로 색을 나눈다.
+ * 자식은 이름표, 간격, 글자 조각 2개로 Glance 한도(10개) 안이다.
+ */
+@Composable
+private fun EventLine(text: EventLineText, tappable: Boolean) {
+    val base = GlanceModifier.fillMaxWidth().height(EVENT_LINE_HEIGHT_DP.dp)
+    Row(
+        modifier = if (tappable) base.clickable(actionRunCallback<ToggleEventsAction>()) else base,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(EVENT_LINE_LABEL, style = style(SUBTLE, EVENT_LINE_SP, bold = true), maxLines = 1)
+        Spacer(GlanceModifier.width(EVENT_LINE_GAP_DP.dp))
+        if (text.soon.isNotEmpty()) {
+            Text(text.soon, style = style(EVENT_SOON, EVENT_LINE_SP, bold = true), maxLines = 1)
+        }
+        if (text.later.isNotEmpty()) {
+            Text(text.later, style = style(TEXT, EVENT_LINE_SP), maxLines = 1)
         }
     }
 }

@@ -49,8 +49,45 @@ fun sparkMaxPixels(count: Int): Int = SPARK_TOTAL_PIXELS / maxOf(count, 1)
 /** 위아래 두 차트가 함께 쓸 오른쪽 숫자 칸 폭. 두 축 숫자 중 가장 넓은 글자에 여백(글자 크기 × 0.6)을 더한다. */
 fun commonGutter(widths: List<Float>, textPx: Float): Float = (widths.maxOrNull() ?: 0f) + textPx * 0.6f
 
-/** 차트·일정 칸 위쪽(테두리 여백 20, 머리줄·간격 32, 차트 위 간격 8, 타일 한 줄 85)의 높이(dp). 2줄이면 230이다. */
-fun topPartHeightDp(rows: Int): Float = 60f + 85f * rows
+/** 머리줄 아래 일정 한 줄의 높이(dp). */
+const val EVENT_LINE_HEIGHT_DP = 18f
+
+/**
+ * 차트·일정 칸 위쪽(테두리 여백 20, 머리줄·간격 32, 차트 위 간격 8, 타일 한 줄 85)의 높이(dp). 2줄이면 230이다.
+ * 일정 줄을 보이면 그 높이만큼 더한다.
+ */
+fun topPartHeightDp(rows: Int, eventLine: Boolean = false): Float =
+    60f + 85f * rows + if (eventLine) EVENT_LINE_HEIGHT_DP else 0f
 
 /** 이 높이(dp) 이상이면 시세 아래에 차트·일정 칸과 작은 차트를 둔다. 2줄이면 220이다. */
-fun detailMinHeightDp(rows: Int): Float = topPartHeightDp(rows) - 10f
+fun detailMinHeightDp(rows: Int, eventLine: Boolean = false): Float = topPartHeightDp(rows, eventLine) - 10f
+
+/** 테두리 여백 20과 머리줄·간격 32를 합한 높이(dp). */
+private const val HEADER_PART_DP = 52f
+
+/** 작은 차트 없는 타일 한 줄의 높이(dp). 마감 후 종가 줄이 들어간 타일 기준이다. */
+private const val COMPACT_TILE_ROW_DP = 75f
+
+/** 차트·일정 칸의 최소 높이(dp). */
+private const val MIN_DETAIL_DP = 60f
+
+/** 위젯 높이로 정한 배치. detailHeightDp는 showDetail일 때만 쓴다. */
+data class WidgetLayout(val showEventLine: Boolean, val showDetail: Boolean, val detailHeightDp: Float)
+
+/**
+ * 일정 줄과 차트 칸을 놓을지 정한다. 우선순위는 줄과 차트 모두, 줄만, 차트만, 타일만 순서다.
+ * 타일이 잘릴 만큼 낮으면 줄을 숨겨 시세를 지킨다.
+ */
+fun widgetLayout(heightDp: Float, rows: Int, hasEvents: Boolean): WidgetLayout {
+    val lineOnlyMin = HEADER_PART_DP + EVENT_LINE_HEIGHT_DP + COMPACT_TILE_ROW_DP * rows
+    val showLine = hasEvents && (heightDp >= detailMinHeightDp(rows, eventLine = true) || heightDp >= lineOnlyMin)
+    val showDetail = heightDp >= detailMinHeightDp(rows, eventLine = showLine)
+    return WidgetLayout(showLine, showDetail, maxOf(MIN_DETAIL_DP, heightDp - topPartHeightDp(rows, showLine)))
+}
+
+/** 일정 목록의 제목·간격을 뺀 줄 수 한도. Glance는 Column 하나에 자식을 10개까지만 그린다. */
+private const val MAX_EVENT_LIST_ROWS = 8
+
+/** 차트 자리에 보일 일정 목록 줄 수. 높이에 맞추되 Glance 한도를 넘지 않는다. */
+fun eventListRows(availableDp: Float, rowDp: Float): Int =
+    minOf(eventRows(availableDp, rowDp, min = 3), MAX_EVENT_LIST_ROWS)

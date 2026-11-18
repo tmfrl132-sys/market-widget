@@ -8,6 +8,7 @@ import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
 import java.time.format.TextStyle
 import java.util.Locale
 
@@ -69,8 +70,15 @@ fun formatUpdatedAt(updatedAt: OffsetDateTime, now: ZonedDateTime): String {
     else "${updated.format(dayFormat)} $time 기준"
 }
 
+/** 일정 날짜(YYYY-MM-DD). 읽을 수 없으면 null이라, 일정 하나가 잘못돼도 위젯 전체가 멈추지 않는다. */
+fun parseEventDate(text: String): LocalDate? = try {
+    LocalDate.parse(text)
+} catch (e: DateTimeParseException) {
+    null
+}
+
 fun upcomingEvents(events: List<Event>, today: LocalDate, limit: Int = 4): List<Event> =
-    events.filter { LocalDate.parse(it.date) >= today }
+    events.filter { event -> parseEventDate(event.date)?.let { it >= today } == true }
         .sortedBy { it.date }
         .take(limit)
 

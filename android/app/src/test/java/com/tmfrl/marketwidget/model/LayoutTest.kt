@@ -68,4 +68,51 @@ class LayoutTest {
         assertEquals(305f, detailMinHeightDp(3), 0f)
         assertEquals(400f, topPartHeightDp(4), 0f)
     }
+
+    @Test fun topPartHeight_addsEventLine() {
+        assertEquals(248f, topPartHeightDp(2, eventLine = true), 0f)
+        assertEquals(238f, detailMinHeightDp(2, eventLine = true), 0f)
+    }
+
+    @Test fun widgetLayout_noEventsKeepsOldHeights() {
+        assertEquals(WidgetLayout(showEventLine = false, showDetail = true, detailHeightDp = 170f), widgetLayout(400f, 2, hasEvents = false))
+        assertEquals(true, widgetLayout(220f, 2, hasEvents = false).showDetail)
+        assertEquals(false, widgetLayout(219f, 2, hasEvents = false).showDetail)
+    }
+
+    @Test fun widgetLayout_eventLineTakesHeightFromChart() {
+        assertEquals(WidgetLayout(showEventLine = true, showDetail = true, detailHeightDp = 152f), widgetLayout(400f, 2, hasEvents = true))
+    }
+
+    @Test fun widgetLayout_detailHeightNeverBelowMinimum() {
+        assertEquals(60f, widgetLayout(238f, 2, hasEvents = true).detailHeightDp, 0f)
+    }
+
+    @Test fun widgetLayout_lineOnlyWhenChartDoesNotFit() {
+        val layout = widgetLayout(237f, 2, hasEvents = true)
+        assertEquals(true, layout.showEventLine)
+        assertEquals(false, layout.showDetail)
+        assertEquals(true, widgetLayout(220f, 2, hasEvents = true).showEventLine)
+    }
+
+    @Test fun widgetLayout_hidesLineWhenTilesWouldBeCut() {
+        val layout = widgetLayout(219f, 2, hasEvents = true)
+        assertEquals(false, layout.showEventLine)
+        assertEquals(false, layout.showDetail)
+        assertEquals(false, widgetLayout(110f, 1, hasEvents = true).showEventLine)
+    }
+
+    @Test fun widgetLayout_oneRowKeepsChartWhenLineDoesNotFit() {
+        // 한 줄 타일은 줄만 놓을 높이(145)보다 차트 기준(135)이 낮아, 그 사이에서는 기존처럼 차트를 둔다
+        val layout = widgetLayout(140f, 1, hasEvents = true)
+        assertEquals(false, layout.showEventLine)
+        assertEquals(true, layout.showDetail)
+        assertEquals(true, widgetLayout(145f, 1, hasEvents = true).showEventLine)
+    }
+
+    @Test fun eventListRows_staysWithinGlanceChildLimit() {
+        assertEquals(3, eventListRows(availableDp = 30f, rowDp = 24f))
+        assertEquals(5, eventListRows(availableDp = 120f, rowDp = 24f))
+        assertEquals(8, eventListRows(availableDp = 960f, rowDp = 24f))
+    }
 }

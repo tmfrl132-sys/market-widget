@@ -1,0 +1,133 @@
+package com.tmfrl.marketwidget.model
+
+import java.time.LocalDate
+import java.time.temporal.ChronoUnit
+
+/** 일정 줄 맨 앞 이름표와 글자 크기(sp). 화면과 폭 추정이 같은 값을 쓴다. */
+const val EVENT_LINE_LABEL = "일정"
+const val EVENT_LINE_SP = 11
+
+/** 이름표와 첫 일정 사이 간격(dp). */
+const val EVENT_LINE_GAP_DP = 6
+
+/** 위젯 테두리 안쪽 좌우 여백 합(dp). */
+private const val LINE_PADDING_DP = 20f
+
+/** 일정 사이 구분 문자. */
+private const val DAY_SEPARATOR = " · "
+
+/** 같은 날 제목을 잇는 문자. */
+private const val TITLE_SEPARATOR = "·"
+
+/** 제목 앞에 붙는 나라 이름. 같은 날 같은 나라에서 반복되면 한 번만 쓴다. */
+private val COUNTRY_PREFIX = mapOf("US" to "미국 ", "KR" to "한국 ")
+
+/** 한 줄에 넣으려고 줄여 쓰는 기관 이름. 전체 일정 목록은 원래 제목을 그대로 보인다. */
+private const val BOK_FULL = "한국은행 "
+private const val BOK_SHORT = "한은 "
+
+/**
+ * 일정 줄의 하루치. title은 같은 날 일정을 묶은 제목, dday는 오늘·내일·D-n이다.
+ * soon은 오늘·내일 일정이라 색으로 강조한다는 뜻이다.
+ */
+data class EventDay(val date: LocalDate, val title: String, val dday: String, val soon: Boolean) {
+    val text: String get() = "${formatEventDate(date)} $title $dday"
+}
+
+/** 화면에 색을 나눠 그릴 두 조각. 오늘·내일은 언제나 앞쪽이라 조각 둘이면 충분하다. */
+data class EventLineText(val soon: String, val later: String)
+
+/**
+ * 같은 날 일정의 제목을 하나로 묶는다. 같은 나라끼리 모으고, 나라 이름이 반복되면 처음 한 번만 쓴다.
+ * 예: 미국 GDP, 미국 PCE는 "미국 GDP·PCE", 미국 CPI, 한국은행 금리 결정은 "미국 CPI·한은 금리 결정".
+ */
+fun mergeEventTitles(events: List<Event>): String =
+    events.groupBy { it.country }
+        .flatMap { (country, sameCountry) -> sameCountryTitles(country, sameCountry) }
+        .joinToString(TITLE_SEPARATOR)
+
+private fun sameCountryTitles(country: String, events: List<Event>): List<String> {
+    val titles = events.map { shortEventTitle(it.title) }.filter { it.isNotEmpty() }.distinct()
+    val prefix = COUNTRY_PREFIX[country] ?: return titles
+    // 나라 이름이 있는 제목을 붙여 놓아야 뒤 제목의 나라를 읽는 사람이 헷갈리지 않는다
+    val (named, others) = titles.partition { it.startsWith(prefix) && it.length > prefix.length }
+    return others + named.mapIndexed { index, title -> if (index == 0) title else title.removePrefix(prefix) }
+}
+
+private fun shortEventTitle(title: String): String {
+    val trimmed = title.trim()
+    return if (trimmed.startsWith(BOK_FULL)) BOK_SHORT + trimmed.removePrefix(BOK_FULL) else trimmed
+}
+
+/** 오늘(서울) 이후 일정을 날짜별로 묶어 가까운 순으로 돌려준다. 날짜를 읽을 수 없거나 제목이 빈 일정은 뺀다. */
+fun eventDays(events: List<Event>, today: LocalDate): List<EventDay> =
+    events.mapNotNull { event -> parseEventDate(event.date)?.takeIf { it >= today }?.let { it to event } }
+        .groupBy({ it.first }, { it.second })
+        .entries
+        // LocalDate는 Comparable<LocalDate>가 아니라 sortedBy에 바로 넘길 수 없다
+        .sortedBy { it.key.toEpochDay() }
+        .mapNotNull { (date, sameDay) ->
+            val title = mergeEventTitles(sameDay)
+            if (title.isEmpty()) return@mapNotNull null
+            EventDay(date, title, formatDday(date, today), ChronoUnit.DAYS.between(today, date) <= 1L)
+        }
+
+/**
+ * 글자 폭 추정(dp). 실제 글꼴을 잴 수 없어 조금 넉넉하게 잡는다.
+ * 모자라게 추정하면 마지막 일정의 글자가 잘리고, 넉넉하면 일정이 하나 덜 보일 뿐이다.
+ */
+fun estimateTextWidthDp(text: String, fontSp: Float): Float =
+    text.sumOf { charWidthEm(it).toDouble() }.toFloat() * fontSp
+
+private fun charWidthEm(c: Char): Float = when (c) {
+    ' ' -> 0.3f
+    in '0'..'9' -> 0.6f
+    in 'A'..'Z' -> 0.72f
+    in 'a'..'z' -> 0.6f
+    '(', ')', '/', '-', '.', ',' -> 0.45f
+    '·' -> 0.5f
+    else -> 1f
+}
+
+/** 일정 글자가 쓸 수 있는 폭(dp). 위젯 폭에서 테두리 여백, 이름표, 간격을 뺀다. */
+fun eventLineWidthDp(widgetWidthDp: Float, fontScale: Float): Float =
+    widgetWidthDp - LINE_PADDING_DP - EVENT_LINE_GAP_DP -
+        estimateTextWidthDp(EVENT_LINE_LABEL, EVENT_LINE_SP * fontScale)
+
+/** 폭 안에 온전히 들어가는 일정 수. 가까운 일정부터 세고, 일정이 있으면 최소 1건이다. */
+fun eventDaysFitting(days: List<EventDay>, availableDp: Float, fontSp: Float): Int {
+    if (days.isEmpty()) return 0
+    val separator = estimateTextWidthDp(DAY_SEPARATOR, fontSp)
+    var used = estimateTextWidthDp(days.first().text, fontSp)
+    var count = 1
+    for (day in days.drop(1)) {
+        used += separator + estimateTextWidthDp(day.text, fontSp)
+        if (used > availableDp) break
+        count++
+    }
+    return count
+}
+
+/** 일정 줄 글자를 강조할 앞 조각과 나머지 조각으로 나눈다. */
+fun eventLineText(days: List<EventDay>): EventLineText {
+    val (soon, later) = days.partition { it.soon }
+    val soonText = soon.joinToString(DAY_SEPARATOR) { it.text }
+    val laterText = later.joinToString(DAY_SEPARATOR) { it.text }
+    return EventLineText(soonText, if (soonText.isNotEmpty() && laterText.isNotEmpty()) DAY_SEPARATOR + laterText else laterText)
+}
+
+/** 일정 줄을 누른 뒤 목록이 열려 있는지. 고른 지표가 없으면 차트 자리가 이미 일정 목록이라 열고 닫을 것이 없다. */
+fun afterEventLineTap(open: Boolean, selected: String?): Boolean = !open && selected != null
+
+/** 저장된 열림 상태가 지금도 유효한지. 앞으로의 일정이 없으면 줄이 숨겨져 닫을 수 없으니 닫힌 것으로 본다. */
+fun eventListOpen(stored: Boolean, hasUpcoming: Boolean): Boolean = stored && hasUpcoming
+
+/**
+ * 타일을 눌렀을 때의 선택. 일정 목록이 열려 있으면 목록만 닫고 그 지표 차트를 연다.
+ * 이때 afterTileTap을 쓰면 지금 지표의 타일을 눌렀을 때 차트가 닫혀 버린다.
+ */
+fun tileTapSelection(s: ChartSelection, tapped: String, auto: Boolean, listOpen: Boolean): ChartSelection = when {
+    !listOpen -> afterTileTap(s, tapped, auto)
+    tapped == s.selected -> s.copy(picking = false)
+    else -> ChartSelection(selected = tapped)
+}
