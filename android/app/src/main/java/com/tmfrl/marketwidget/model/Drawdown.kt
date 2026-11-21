@@ -83,7 +83,7 @@ private fun maxEpisode(quote: Quote): DrawdownEpisode? {
 
 /**
  * 고른 기간의 잠수 차트. 오늘 차트와 낙폭을 안 쓰는 지표(mdd가 null)는 null.
- * 1개월~5년은 그 기간 점으로 기기가 계산하고(기간 첫 값부터의 누적 고점), MAX는 수집기 max_depths(길이가 max_closes와 같을 때)를 쓴다.
+ * 7일~5년은 그 기간 점으로 기기가 계산하고(기간 첫 값부터의 누적 고점), MAX는 수집기 max_depths(길이가 max_closes와 같을 때)를 쓴다.
  * 표시는 사건(MAX, 날짜 있는 것만) → 바닥 → 현재 순서다. 같은 점이면 문구 하나로 합친다.
  */
 fun drawdownChart(quote: Quote, period: Period): DrawdownChart? {
@@ -132,12 +132,12 @@ private val EPISODE_MONTH = DateTimeFormatter.ofPattern("yyyy.M")
 /**
  * 문구 줄의 구간 부분. 예: "10/7 고점 → 10/8 바닥 → 미회복". dates는 차트 점과 1:1인 날짜(chartDates).
  * 날짜를 믿을 수 없거나(빈 목록, 읽을 수 없음, 위치가 범위 밖) 구간이 없으면 null.
- * 날짜 형식은 1·3개월 M/d, 1년 yy.M.d, 5년·MAX yyyy.M.
+ * 날짜 형식은 7일·1·3개월 M/d, 1년 yy.M.d, 5년·MAX yyyy.M.
  */
 fun formatEpisode(dates: List<String>, episode: DrawdownEpisode?, period: Period): String? {
     if (episode == null || dates.isEmpty()) return null
     val format = when (period) {
-        Period.ONE_MONTH, Period.THREE_MONTHS -> EPISODE_DAY
+        Period.WEEK, Period.ONE_MONTH, Period.THREE_MONTHS -> EPISODE_DAY
         Period.ONE_YEAR -> EPISODE_SHORT_DATE
         Period.FIVE_YEARS, Period.MAX -> EPISODE_MONTH
         Period.TODAY -> return null

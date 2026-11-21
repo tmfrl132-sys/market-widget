@@ -93,6 +93,7 @@ class CompareTest {
 
     @Test fun series_todayIsNotSupported() {
         assertNull(compareSeries(oneYearPrimary, oneYearOther, Period.TODAY))
+        assertNull(compareSeries(oneYearPrimary, oneYearOther, Period.WEEK))
     }
 
     @Test fun series_nullWhenOtherDatesReversed() {

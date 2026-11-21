@@ -231,6 +231,33 @@ class LiveQuoteTest {
         assertEquals(listOf(1.0, 2.0), merged(base, LiveQuote(95.0, -5.0, -5.0, 100.0)).intraday)
     }
 
+    @Test fun apply_setsWeekEndingAtPriceAndKeepsOldWhenNoneReceived() {
+        val base = withMax(peak = 200.0, mdd = -60.0).copy(week = listOf(1.0, 2.0), week_times = listOf(1L, 2L))
+        val live = LiveQuote(95.0, -5.0, -5.0, 100.0, week = WeekSeries(listOf(99.0, 97.0, 96.0), listOf(10L, 20L, 30L)))
+        val quote = merged(base, live)
+        assertEquals(listOf(99.0, 97.0, 95.0), quote.week)
+        assertEquals(listOf(10L, 20L, 30L), quote.week_times)
+        val kept = merged(base, LiveQuote(95.0, -5.0, -5.0, 100.0))
+        assertEquals(listOf(1.0, 2.0), kept.week)
+        assertEquals(listOf(1L, 2L), kept.week_times)
+    }
+
+    @Test fun apply_weekEndFollowsHistoryPriceNotNxtPrice() {
+        val base = withMax(peak = 200.0, mdd = -60.0)
+        val week = WeekSeries(listOf(99.0, 97.0), listOf(10L, 20L))
+        assertEquals(listOf(99.0, 96.0), merged(base, LiveQuote(95.0, -5.0, -5.0, 100.0, historyPrice = 96.0, week = week)).week)
+        assertEquals(listOf(99.0, 97.0), merged(base, LiveQuote(95.0, -5.0, -5.0, 100.0, historyPrice = null, week = week)).week)
+    }
+
+    @Test fun parseWeek_dropsEmptyBarsAndKeepsTimes() {
+        val week = parseWeek(chart("97.0", day2, listOf(day1, day1 + 1800, day2), "[99.0, null, 97.126]"))!!
+        assertEquals(listOf(99.0, 97.13), week.values)
+        assertEquals(listOf(day1, day2), week.times)
+        assertNull(parseWeek("""{"chart": {"result": null}}"""))
+        assertNull(parseWeek(chart("97.0", day2, listOf(day1), "[null]")))
+        assertNull(parseWeek(chart("97.0", day2, listOf(day1), "[1.0, 2.0]")))
+    }
+
     @Test fun parseIntraday_dropsEmptyBars() {
         assertEquals(listOf(99.0, 97.13), parseIntraday(chart("97.0", day2, listOf(day1, day2, day2 + 300), "[99.0, null, 97.126]")).values)
         assertEquals(IntradaySeries(), parseIntraday("""{"chart": {"result": null}}"""))

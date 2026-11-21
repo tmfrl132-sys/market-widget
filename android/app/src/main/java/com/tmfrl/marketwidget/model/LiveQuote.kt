@@ -50,7 +50,15 @@ data class LiveQuote(
     // NXT 시세는 화면 값(price)만 NXT이고 여기에는 KRX 가격을 둔다. null이면 기록을 건드리지 않는다(KRX 봉이 아직 없는 프리마켓).
     // 갱신 때 계산에만 쓰고 캐시에 넣지 않는다.
     val historyPrice: Double? = price,
+    // 7일 차트 30분봉. null이면 이번 갱신에 받지 못한 것이라 이전 값을 둔다.
+    val week: WeekSeries? = null,
 )
+
+/** 최근 7일 30분봉. times는 values와 1:1인 초 단위 epoch다. */
+data class WeekSeries(val values: List<Double>, val times: List<Long>)
+
+/** 7일 차트 기간(초). 거래일이 아니라 달력 7일이다. */
+const val WEEK_SECONDS = 7 * 24 * 3600L
 
 /** 오늘 봉. times는 values와 1:1인 초 단위 epoch이고, 믿을 수 없으면 비어 있다. 장 시간을 모르면 시작·끝은 null이다. */
 data class IntradaySeries(
@@ -173,6 +181,16 @@ fun parseLastSession(text: String): IntradaySeries {
         rows.filter { localDate(it.first, result.meta.gmtoffset) == lastDate }
     }
     return IntradaySeries(kept.map { round2(it.second) }, kept.map { it.first }, day?.start, day?.end)
+}
+
+/**
+ * Yahoo 7일 30분봉 응답을 읽는다. 봉 사이 휴장(밤, 주말)은 잇대어 그린다.
+ * 봉이 없거나 시각과 종가 수가 다르면 null(이전 7일 차트를 유지한다).
+ */
+fun parseWeek(text: String): WeekSeries? {
+    val result = json.decodeFromString<ChartResponse>(text).chart.result?.firstOrNull() ?: return null
+    val rows = closeRows(result)?.takeIf { it.isNotEmpty() } ?: return null
+    return WeekSeries(rows.map { round2(it.second) }, rows.map { it.first })
 }
 
 /** 현물 range=5d 5분봉 응답을 합친 차트 재료로 읽는다. 봉이 없거나 시각과 종가 수가 다르면 null. */
@@ -523,6 +541,10 @@ fun applyLiveQuotes(data: MarketData, live: Map<String, LiveQuote>, updatedAt: S
                     session_end = if (keepIntraday) quote.session_end else it.sessionEnd,
                     prev_close = round2(it.prevClose),
                     combined = combinedAfter(quote, it, now),
+                    // 7일 끝 봉은 기록과 같은 가격으로 맞춘다(NXT 시세에서도 Yahoo 30분봉은 KRX 값이다)
+                    week = it.week?.let { week -> it.historyPrice?.let { price -> replaceLast(week.values, round2(price)) } ?: week.values }
+                        ?: quote.week,
+                    week_times = it.week?.times ?: quote.week_times,
                     stale = false,
                 )
             } ?: quote

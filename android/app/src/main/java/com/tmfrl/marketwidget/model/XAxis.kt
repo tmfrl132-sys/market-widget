@@ -42,7 +42,7 @@ private val SESSION_TIME_FORMAT = DateTimeFormatter.ofPattern("HH:mm")
 /** 균등 간격 눈금의 문구 형식. 경계 눈금도 5년만 빼고 같은 형식을 쓴다. */
 private fun dateFormatOf(period: Period): DateTimeFormatter? = when (period) {
     Period.TODAY -> null
-    Period.ONE_MONTH, Period.THREE_MONTHS -> MONTH_DAY_FORMAT
+    Period.WEEK, Period.ONE_MONTH, Period.THREE_MONTHS -> MONTH_DAY_FORMAT
     Period.ONE_YEAR -> SHORT_YEAR_MONTH_FORMAT
     Period.FIVE_YEARS -> YEAR_MONTH_FORMAT
     Period.MAX -> YEAR_FORMAT
@@ -54,8 +54,9 @@ private fun parseDateOrNull(text: String): LocalDate? = try {
     null
 }
 
-/** 달력 구간 번호. 1개월은 월요일 시작 주, 3개월은 달, 1년은 분기, 5년과 MAX는 해다. */
+/** 달력 구간 번호. 7일은 날짜, 1개월은 월요일 시작 주, 3개월은 달, 1년은 분기, 5년과 MAX는 해다. */
 private fun sectionOf(day: LocalDate, period: Period): Long = when (period) {
+    Period.WEEK -> day.toEpochDay()
     Period.ONE_MONTH -> day.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY)).toEpochDay()
     Period.THREE_MONTHS -> day.year * 12L + day.monthValue
     Period.ONE_YEAR -> day.year * 4L + (day.monthValue - 1) / 3

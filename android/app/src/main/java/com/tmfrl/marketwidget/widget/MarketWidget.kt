@@ -792,10 +792,10 @@ private fun ChartPanel(
     // 마감 뒤(다음 개장 전)면 머리줄 등락이 종가 대비 "마감 후"이고, 둘째 줄 앞에 종가와 그 등락률을 쓴다
     val afterClose = combined?.takeIf { it.afterClose }
     val episodeText = drawdown?.let { formatEpisode(chartDates(quote, period), it.episode, period) }
-    // 비교 안내. 고르는 중, 오늘 기간, 날짜를 맞출 수 없을 때 최저·최고 줄 자리에 쓴다.
+    // 비교 안내. 고르는 중, 오늘·7일 기간, 날짜를 맞출 수 없을 때 최저·최고 줄 자리에 쓴다.
     val compareNotice = when {
         picking -> "비교할 지표 타일을 누르세요"
-        other != null && today -> "비교는 1개월~MAX에서 보입니다"
+        other != null && (today || period == Period.WEEK) -> "비교는 1개월~MAX에서 보입니다"
         other != null -> "두 지표의 날짜를 맞출 수 없어 비교를 그리지 않았습니다"
         else -> null
     }
@@ -998,7 +998,7 @@ private fun detailBitmap(
 
 /**
  * 차트 아래 라디오 버튼 줄. 누르면 바로 그 기간으로 바뀐다. 5년·MAX에서는 끝에 로그 버튼이 나온다.
- * compareButton이 있으면 맨 끝에 비교 버튼을 둔다. 자식은 라디오 6개와 버튼 2개로 Glance 한도(10개) 안이다.
+ * compareButton이 있으면 맨 끝에 비교 버튼을 둔다. 자식은 라디오 7개와 버튼 2개로 Glance 한도(10개) 안이다.
  */
 @Composable
 private fun PeriodSelector(current: Period, logScale: Boolean, compareButton: CompareButton?) {

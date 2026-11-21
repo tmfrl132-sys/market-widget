@@ -1,8 +1,13 @@
 package com.tmfrl.marketwidget.model
 
-/** 차트 기간. 1개월·3개월은 1년 일봉을 잘라 쓰고, 5년은 주봉을 쓴다. 오늘은 5분봉, MAX는 전체 기간이다. */
+import java.time.DateTimeException
+import java.time.Instant
+import java.time.ZoneId
+
+/** 차트 기간. 1개월·3개월은 1년 일봉을 잘라 쓰고, 5년은 주봉을 쓴다. 오늘은 5분봉, 7일은 최근 7일 30분봉, MAX는 전체 기간이다. */
 enum class Period(val label: String, val agoLabel: String) {
     TODAY("오늘", "장 시작"),
+    WEEK("7일", "7일 전"),
     ONE_MONTH("1개월", "1개월 전"),
     THREE_MONTHS("3개월", "3개월 전"),
     ONE_YEAR("1년", "1년 전"),
@@ -22,7 +27,7 @@ fun <T> periodValues(daily: List<T>, weekly: List<T>, period: Period): List<T> =
     Period.THREE_MONTHS -> daily.takeLast(THREE_MONTH_DAYS)
     Period.ONE_YEAR -> daily
     Period.FIVE_YEARS -> weekly
-    Period.TODAY, Period.MAX -> emptyList()
+    Period.TODAY, Period.WEEK, Period.MAX -> emptyList()
 }
 
 fun parsePeriod(name: String?): Period =
@@ -31,6 +36,7 @@ fun parsePeriod(name: String?): Period =
 /** 기기에 옛 형식(daily 없음) data.json만 있으면 3개월 chart로 대신한다. */
 fun chartValues(quote: Quote, period: Period): List<Double> = when (period) {
     Period.TODAY -> quote.intraday
+    Period.WEEK -> quote.week
     Period.MAX -> quote.max_closes
     else -> if (quote.daily.isEmpty()) quote.chart else periodValues(quote.daily, quote.weekly, period)
 }
@@ -41,6 +47,7 @@ fun chartValues(quote: Quote, period: Period): List<Double> = when (period) {
  */
 fun chartDates(quote: Quote, period: Period): List<String> = when (period) {
     Period.TODAY -> emptyList()
+    Period.WEEK -> weekDates(quote)
     Period.MAX -> if (quote.max_dates.size == quote.max_closes.size) quote.max_dates else emptyList()
     Period.FIVE_YEARS -> when {
         quote.daily.isEmpty() || quote.weekly_dates.size != quote.weekly.size -> emptyList()
@@ -50,4 +57,20 @@ fun chartDates(quote: Quote, period: Period): List<String> = when (period) {
         quote.daily.isEmpty() || quote.daily_dates.size != quote.daily.size -> emptyList()
         else -> periodValues(quote.daily_dates, quote.weekly_dates, period)
     }
+}
+
+/**
+ * 7일 30분봉의 봉마다 시장 현지 날짜(YYYY-MM-DD). 가로축 날짜 눈금과 MDD 구간 날짜에 쓴다.
+ * 시장 시간대를 모르면 서울 날짜다. 시각 수가 값 수와 다르면 빈 목록이다.
+ */
+fun weekDates(quote: Quote): List<String> {
+    if (quote.week_times.size != quote.week.size) return emptyList()
+    val zone = quote.market_tz?.let { name ->
+        try {
+            ZoneId.of(name)
+        } catch (e: DateTimeException) {
+            null
+        }
+    } ?: SEOUL
+    return quote.week_times.map { Instant.ofEpochSecond(it).atZone(zone).toLocalDate().toString() }
 }

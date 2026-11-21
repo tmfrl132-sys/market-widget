@@ -55,7 +55,7 @@ private fun isSorted(days: List<LocalDate>) = days.zipWithNext().none { (before,
 
 /** 비교 지표는 기간으로 자르지 않은 같은 종류의 전체 목록을 쓴다. 휴장일 차이로 첫 날이 어긋나지 않게 하기 위해서다. */
 private fun fullSeries(quote: Quote, period: Period): Pair<List<Double>, List<String>>? = when (period) {
-    Period.TODAY -> null
+    Period.TODAY, Period.WEEK -> null
     Period.ONE_MONTH, Period.THREE_MONTHS, Period.ONE_YEAR -> quote.daily to quote.daily_dates
     Period.FIVE_YEARS -> quote.weekly to quote.weekly_dates
     Period.MAX -> quote.max_closes to quote.max_dates
@@ -64,10 +64,10 @@ private fun fullSeries(quote: Quote, period: Period): Pair<List<Double>, List<St
 /**
  * 두 지표를 주 지표 날짜에 맞춘다. 공통 시작일(두 첫 날짜 중 늦은 날) 이후의 주 지표 점만 남기고,
  * 비교 값은 그 날짜 이하에서 가장 늦은 값을 이어 쓴다. 두 값 모두 공통 시작일 값을 100으로 둔다.
- * 오늘 기간, 날짜와 값 길이가 다름, 날짜를 읽을 수 없음, 역순, 남은 점 2개 미만, 기준값 0이면 null.
+ * 오늘·7일 기간(봉 시각이 시장마다 달라 맞출 수 없다), 날짜와 값 길이가 다름, 날짜를 읽을 수 없음, 역순, 남은 점 2개 미만, 기준값 0이면 null.
  */
 fun compareSeries(primary: Quote, other: Quote, period: Period): CompareSeries? {
-    if (period == Period.TODAY) return null
+    if (period == Period.TODAY || period == Period.WEEK) return null
     val values = chartValues(primary, period)
     val dates = chartDates(primary, period)
     if (values.size < 2 || dates.size != values.size) return null

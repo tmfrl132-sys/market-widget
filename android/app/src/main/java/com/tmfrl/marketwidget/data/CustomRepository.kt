@@ -112,6 +112,8 @@ class CustomRepository(
                 parseLiveQuote(text)?.withIntraday(orElse(IntradaySeries()) { parseIntraday(get(INTRADAY_URL.format(encoded))) })
             }
             if (live == null) return failed(ticker, previous, updatedAt)
+            // 7일 차트 봉. 한국 종목도 Yahoo 심볼(005930.KS)로 받는다. 실패하면 이전 값을 둔다.
+            val withWeek = live.copy(week = fetchWeek(encoded, now.toEpochSecond(), get))
 
             val due = historyDue(previous?.history_at, nowMillis)
             val daily = if (due) series(YAHOO_1Y_URL.format(encoded)) { marketTz = marketTz ?: it } else null
@@ -126,7 +128,7 @@ class CustomRepository(
             }
             CustomEntry(
                 id = ticker.id,
-                quote = assembleCustomQuote(ticker, previous?.quote, live, daily, weekly, max, marketTz, updatedAt),
+                quote = assembleCustomQuote(ticker, previous?.quote, withWeek, daily, weekly, max, marketTz, updatedAt),
                 history_at = if (daily != null && weekly != null) nowMillis else previous?.history_at,
                 max_at = if (max != null) nowMillis else previous?.max_at,
                 last_ok_at = nowMillis,

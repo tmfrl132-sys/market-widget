@@ -93,6 +93,11 @@ class XAxisTest {
         )
     }
 
+    @Test fun dateTicks_weekMarksFirstBarOfEachDay() {
+        val dates = listOf("2026-11-16", "2026-11-16", "2026-11-17", "2026-11-17", "2026-11-18")
+        assertTicks(listOf("11/17", "11/18"), listOf(0.5f, 1f), dateTicks(dates, 5, Period.WEEK))
+    }
+
     @Test fun dateTicks_firstValueOnBoundaryIsNotATick() {
         // 첫 값 2026-11-02는 월요일이지만 앞 구간을 알 수 없다
         val dates = listOf("2026-11-02", "2026-11-09", "2026-11-16", "2026-11-17")

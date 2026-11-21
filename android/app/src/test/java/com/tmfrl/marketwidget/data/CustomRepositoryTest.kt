@@ -35,6 +35,7 @@ class CustomRepositoryTest {
         "range=1d" to chart(listOf(day2, day2 + 300), "[101.0, 102.0]"),
         "range=1y" to chart(listOf(day1 - 86400, day1, day2), "[90.0, 100.0, 101.0]"),
         "range=5y" to chart(listOf(day1 - 7 * 86400, day1), "[80.0, 101.0]"),
+        "interval=30m" to chart(listOf(day1, day2), "[99.0, 101.5]"),
         "period1=0" to chart(listOf(day1 - 3 * 86400, day1 - 2 * 86400, day1 - 86400, day1), "[50.0, 120.0, 60.0, 101.0]"),
     )
 
@@ -62,6 +63,9 @@ class CustomRepositoryTest {
         assertEquals(-50.0, quote.mdd!!, 0.0)
         assertEquals(120.0, quote.peak!!, 0.0)
         assertEquals(listOf(101.0, 102.0), quote.intraday)
+        assertEquals(listOf(99.0, 102.0), quote.week)
+        assertEquals(listOf(day1, day2), quote.week_times)
+        assertTrue(requested.any { it.contains("period1=${now.toEpochSecond() - 7 * 86400}&period2=${now.toEpochSecond()}&interval=30m") })
         assertEquals("America/New_York", quote.market_tz)
         assertFalse(quote.stale)
         assertEquals(now.toInstant().toEpochMilli(), entry.history_at)
@@ -76,7 +80,7 @@ class CustomRepositoryTest {
         requested.clear()
         repo.refresh(WidgetSettings(custom = listOf(aapl)), now.plusMinutes(5))
         assertTrue(requested.none { it.contains("range=1y") || it.contains("range=5y") || it.contains("period1=0") })
-        assertEquals(2, requested.size)
+        assertEquals(3, requested.size)
     }
 
     @Test fun refresh_failureKeepsValuesAsStale() = runTest {

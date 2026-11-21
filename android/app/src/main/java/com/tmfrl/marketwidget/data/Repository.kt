@@ -8,6 +8,8 @@ import com.tmfrl.marketwidget.model.LIVE_SYMBOLS
 import com.tmfrl.marketwidget.model.LiveQuote
 import com.tmfrl.marketwidget.model.MarketData
 import com.tmfrl.marketwidget.model.NAVER_CODES
+import com.tmfrl.marketwidget.model.WEEK_SECONDS
+import com.tmfrl.marketwidget.model.WeekSeries
 import com.tmfrl.marketwidget.model.applyLiveQuotes
 import com.tmfrl.marketwidget.model.encodeMarketData
 import com.tmfrl.marketwidget.model.parseFuturesSeries
@@ -18,6 +20,7 @@ import com.tmfrl.marketwidget.model.parseNaverIndex
 import com.tmfrl.marketwidget.model.parseNaverMinutes
 import com.tmfrl.marketwidget.model.parseMarketData
 import com.tmfrl.marketwidget.model.parseSpotSeries
+import com.tmfrl.marketwidget.model.parseWeek
 import com.tmfrl.marketwidget.model.withIntraday
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -32,6 +35,13 @@ import java.time.OffsetDateTime
 const val DATA_URL = "https://tmfrl132-sys.github.io/market-widget/data.json"
 internal const val YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/%s?range=5d&interval=1d"
 internal const val INTRADAY_URL = "https://query1.finance.yahoo.com/v8/finance/chart/%s?range=1d&interval=5m"
+
+/** 최근 7일 30분봉(7일 차트). period1은 지금부터 달력 7일 전이다. */
+internal const val WEEK_URL = "https://query1.finance.yahoo.com/v8/finance/chart/%s?period1=%d&period2=%d&interval=30m"
+
+/** 7일 차트 봉. 실패하면 null이고 이전 7일 차트를 쓴다. */
+internal fun fetchWeek(encodedSymbol: String, nowSeconds: Long, get: (String) -> String = ::httpGet): WeekSeries? =
+    orElse(null) { parseWeek(get(WEEK_URL.format(encodedSymbol, nowSeconds - WEEK_SECONDS, nowSeconds))) }
 
 /** 5일 5분봉. S&P500·나스닥100 현물과 그 선물(합친 24시간 차트 재료)에 쓴다. */
 internal const val INTRADAY_5D_URL = "https://query1.finance.yahoo.com/v8/finance/chart/%s?range=5d&interval=5m"
@@ -75,12 +85,13 @@ class Repository(
         fun forContext(context: Context) =
             Repository(File(context.filesDir, "data.json"), ::fetchLiveQuotes) { httpGet(DATA_URL) }
 
-        /** LIVE_SYMBOLS 11개를 한꺼번에 받는다. 실패한 항목은 결과에서 빠진다. */
+        /** LIVE_SYMBOLS 11개를 한꺼번에 받는다. 실패한 항목은 결과에서 빠진다. 7일 차트 봉은 모두 Yahoo에서 받는다. */
         private suspend fun fetchLiveQuotes(): Map<String, LiveQuote> = coroutineScope {
+            val nowSeconds = System.currentTimeMillis() / 1000
             LIVE_SYMBOLS.map { (id, symbol) ->
                 async(Dispatchers.IO) {
                     val live = NAVER_CODES[id]?.let(::fetchNaver) ?: fetchYahoo(symbol, COMBINED_FUTURES[id])
-                    live?.let { id to it }
+                    live?.let { id to it.copy(week = fetchWeek(encode(symbol), nowSeconds)) }
                 }
             }.awaitAll().filterNotNull().toMap()
         }

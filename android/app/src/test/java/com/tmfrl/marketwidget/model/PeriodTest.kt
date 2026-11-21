@@ -29,8 +29,25 @@ class PeriodTest {
     }
 
     @Test fun period_labels() {
-        assertEquals(listOf("오늘", "1개월", "3개월", "1년", "5년", "MAX"), Period.entries.map { it.label })
+        assertEquals(listOf("오늘", "7일", "1개월", "3개월", "1년", "5년", "MAX"), Period.entries.map { it.label })
         assertEquals("1년 전", Period.ONE_YEAR.agoLabel)
+        assertEquals("7일 전", Period.WEEK.agoLabel)
+    }
+
+    @Test fun chartValues_weekUsesThirtyMinuteBars() {
+        val quote = Quote("KS11", "코스피", 1.0, 0.0, 0.0, daily = daily, week = listOf(5.0, 6.0, 7.0))
+        assertEquals(listOf(5.0, 6.0, 7.0), chartValues(quote, Period.WEEK))
+        assertEquals(emptyList<Double>(), periodValues(daily, weekly, Period.WEEK))
+    }
+
+    @Test fun weekDates_useMarketZoneAndFallBackToSeoul() {
+        // 2026-11-13 20:30 UTC = 뉴욕 15:30(금) = 서울 11-14 05:30
+        val time = 1794601800L
+        val gspc = Quote("GSPC", "S&P500", 1.0, 0.0, 0.0, week = listOf(1.0), week_times = listOf(time), market_tz = "America/New_York")
+        assertEquals(listOf("2026-11-13"), chartDates(gspc, Period.WEEK))
+        assertEquals(listOf("2026-11-14"), chartDates(gspc.copy(market_tz = null), Period.WEEK))
+        assertEquals(listOf("2026-11-14"), chartDates(gspc.copy(market_tz = "Not/AZone"), Period.WEEK))
+        assertEquals(emptyList<String>(), chartDates(gspc.copy(week_times = emptyList()), Period.WEEK))
     }
 
     @Test fun chartValues_todayUsesIntradayAndMaxUsesFullHistory() {
