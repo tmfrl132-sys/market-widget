@@ -7,11 +7,19 @@ on:
       - ".github/workflows/android.yml"
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "배포할 버전(예: v1.5.0). 넣으면 그 태그를 만들고 서명된 APK를 Releases에 올린다. 비우면 테스트·디버그 빌드만"
+        required: false
+        default: ""
 permissions:
   contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # 태그 push면 그 태그, 수동 실행에 버전을 넣었으면 그 버전, 아니면 빈 값(배포 안 함)
+      RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.version }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -24,27 +32,36 @@ jobs:
       - name: 단위 테스트
         run: gradle -p android testDebugUnitTest
       - name: 디버그 빌드
-        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        if: env.RELEASE_TAG == ''
         run: gradle -p android assembleDebug
 
-      # 태그(v*)를 push하면 서명된 APK를 Releases에 올린다
+      # 태그(v*)를 push하거나 수동 실행에 버전을 넣으면 서명된 APK를 Releases에 올린다
+      - name: 버전 확인
+        if: env.RELEASE_TAG != ''
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "버전은 v1.5.0 형식이어야 한다: $RELEASE_TAG"; exit 1
+          fi
       - name: 서명 키 풀기
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: env.RELEASE_TAG != ''
         env:
           KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
         run: echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/market.p12"
       - name: 서명된 릴리스 빌드
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: env.RELEASE_TAG != ''
         env:
           KEYSTORE_FILE: ${{ runner.temp }}/market.p12
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          VERSION_NAME: ${{ github.ref_name }}
+          VERSION_NAME: ${{ env.RELEASE_TAG }}
         run: |
           gradle -p android assembleRelease
-          cp android/app/build/outputs/apk/release/app-release.apk "market-widget-${GITHUB_REF_NAME}.apk"
+          cp android/app/build/outputs/apk/release/app-release.apk "market-widget-${RELEASE_TAG}.apk"
       - name: Release에 올리기
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: env.RELEASE_TAG != ''
         uses: softprops/action-gh-release@v2
         with:
-          files: market-widget-${{ github.ref_name }}.apk
+          # 수동 실행이면 태그가 아직 없어서 이번 커밋에 새로 만든다
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          files: market-widget-${{ env.RELEASE_TAG }}.apk
