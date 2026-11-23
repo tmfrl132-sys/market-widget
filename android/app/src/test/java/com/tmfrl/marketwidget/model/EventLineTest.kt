@@ -50,7 +50,7 @@ class EventLineTest {
             us("2026-12-04", "미국 고용보고서"),
         )
         assertEquals(
-            listOf("11/25(수) 미국 GDP·PCE D-7", "11/26(목) 한은 금리 결정 D-8", "12/4(금) 미국 고용보고서 D-16"),
+            listOf("11/25(수) 미국 GDP·PCE ★★ D-7", "11/26(목) 한은 금리 결정 ★★ D-8", "12/4(금) 미국 고용보고서 ★★★ D-16"),
             eventDays(events, today).map { it.text },
         )
     }
@@ -101,8 +101,28 @@ class EventLineTest {
     }
 
     @Test fun lineWidth_subtractsPaddingLabelAndGap() {
-        assertEquals(452f, eventLineWidthDp(500f, fontScale = 1f), 0.001f)
-        assertEquals(447.6f, eventLineWidthDp(500f, fontScale = 1.2f), 0.001f)
+        // "일정 ▾" = (1 + 1 + 0.3 + 0.7)em x 12sp = 36dp
+        assertEquals(438f, eventLineWidthDp(500f, fontScale = 1f), 0.001f)
+        assertEquals(430.8f, eventLineWidthDp(500f, fontScale = 1.2f), 0.001f)
+    }
+
+    @Test fun stars_rankMajorReleases() {
+        assertEquals(3, eventStars("FOMC 금리 결정"))
+        assertEquals(3, eventStars("미국 CPI"))
+        assertEquals(3, eventStars("미국 고용보고서"))
+        assertEquals(2, eventStars("한국은행 금리 결정"))
+        assertEquals(2, eventStars("미국 PCE"))
+        assertEquals(1, eventStars("미국 GDP"))
+        assertEquals(0, eventStars("모르는 일정"))
+        assertEquals("★★★", formatStars(3))
+        assertEquals("", formatStars(0))
+        assertEquals("★★★", formatStars(9))
+    }
+
+    @Test fun eventDays_useHighestStarsOfTheDayAndOmitWhenUnknown() {
+        val days = eventDays(listOf(us("2026-11-25", "미국 GDP"), us("2026-11-25", "미국 CPI"), us("2026-11-26", "기타")), today)
+        assertEquals(listOf(3, 0), days.map { it.stars })
+        assertEquals("11/26(목) 기타 D-8", days[1].text)
     }
 
     private val threeDays = eventDays(

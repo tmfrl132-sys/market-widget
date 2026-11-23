@@ -12,6 +12,7 @@ import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.LocalTime
+import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
@@ -191,6 +192,106 @@ fun parseWeek(text: String): WeekSeries? {
     val result = json.decodeFromString<ChartResponse>(text).chart.result?.firstOrNull() ?: return null
     val rows = closeRows(result)?.takeIf { it.isNotEmpty() } ?: return null
     return WeekSeries(rows.map { round2(it.second) }, rows.map { it.first })
+}
+
+/**
+ * 오늘 차트 창의 기준 시각(v1.6). 창은 "정규장 시작 → 다음 정규장 시작" 24시간으로 고정한다.
+ * zone의 날짜마다 time이 정규장 시작이다(서머타임은 시간대가 맞춘다).
+ */
+data class DailyAnchor(val zone: ZoneId, val time: LocalTime) {
+    /** t 이하에서 가장 최근의 기준 시각(요일 무관). */
+    fun latest(t: Long): Long {
+        val day = Instant.ofEpochSecond(t).atZone(zone).toLocalDate()
+        val today = day.atTime(time).atZone(zone).toEpochSecond()
+        return if (today <= t) today else day.minusDays(1).atTime(time).atZone(zone).toEpochSecond()
+    }
+
+    /** start 다음 날짜의 기준 시각. 서머타임이 바뀌는 날만 빼면 24시간 뒤다. */
+    fun next(start: Long): Long = shifted(start, 1)
+
+    /** start 앞 날짜의 기준 시각. */
+    fun previous(start: Long): Long = shifted(start, -1)
+
+    private fun shifted(start: Long, days: Long): Long =
+        Instant.ofEpochSecond(start).atZone(zone).toLocalDate().plusDays(days).atTime(time).atZone(zone).toEpochSecond()
+}
+
+/** 미국 정규장 시작(뉴욕 09:30 = 서울 23:30, 서머타임 22:30). */
+val NEW_YORK_OPEN = DailyAnchor(ZoneId.of("America/New_York"), LocalTime.of(9, 30))
+
+/** 서울 외환시장 시작 09:00. */
+val SEOUL_FX_OPEN = DailyAnchor(SEOUL, LocalTime.of(9, 0))
+
+/**
+ * 오늘 차트를 고정 24시간 창으로 그리는 지표(v1.6). 거의 24시간 거래해서 Yahoo의 하루 구간이 정규장과 맞지 않던 것들이다.
+ * 미국 지표는 S&P500·나스닥100 합친 차트와 같은 뉴욕 09:30 창이라 가로축이 같다. 원/달러는 서울 09:00 창이다.
+ */
+val ANCHORED_DAYS: Map<String, DailyAnchor> = mapOf(
+    "VIX" to NEW_YORK_OPEN,
+    "DXY" to NEW_YORK_OPEN,
+    "TNX" to NEW_YORK_OPEN,
+    "CL" to NEW_YORK_OPEN,
+    "GC" to NEW_YORK_OPEN,
+    "KRW" to SEOUL_FX_OPEN,
+)
+
+/** 창에 점이 2개 미만일 때 하루씩 앞 창으로 물러나는 최대 횟수. 주말·연휴에 마지막 거래일 창을 보인다. */
+private const val MAX_ANCHOR_STEPS = 7
+
+/** 5분봉 길이. 마지막 봉 뒤로 기준 시각을 늘리는 길이다. */
+private const val FIVE_MINUTES = 300L
+
+/**
+ * Yahoo range=5d 5분봉에서 고정 창 [기준 시각, 다음 기준 시각]의 봉만 뽑는다(v1.6).
+ * 기준 시각 asOf = min(now, 마지막 봉 + 5분). 창 시작은 asOf 이하의 가장 최근 기준 시각이고, 점은 asOf까지만이라
+ * 오른쪽은 비어 있다. 점이 2개 미만이면(정규장 시작 직후, 주말) 하루씩 최대 7번 앞 창으로 물러난다.
+ * 장 시간(sessionStart·End)은 창이다. 봉이 없거나 시각과 종가 수가 다르면 빈 값(이전 오늘 차트를 유지한다).
+ */
+fun parseAnchoredDay(text: String, anchor: DailyAnchor, now: Long): IntradaySeries {
+    val result = json.decodeFromString<ChartResponse>(text).chart.result?.firstOrNull() ?: return IntradaySeries()
+    val rows = closeRows(result)?.sortedBy { it.first } ?: return IntradaySeries()
+    val last = rows.lastOrNull() ?: return IntradaySeries()
+    val asOf = minOf(now, last.first + FIVE_MINUTES)
+    var start = anchor.latest(asOf)
+    fun inWindow(from: Long): List<Pair<Long, Double>> {
+        val until = minOf(asOf, anchor.next(from))
+        return rows.filter { it.first in from..until }
+    }
+    var kept = inWindow(start)
+    var steps = 0
+    while (kept.size < 2 && steps < MAX_ANCHOR_STEPS) {
+        start = anchor.previous(start)
+        kept = inWindow(start)
+        steps++
+    }
+    if (kept.size < 2) return IntradaySeries()
+    return IntradaySeries(kept.map { round2(it.second) }, kept.map { it.first }, start, anchor.next(start))
+}
+
+/**
+ * 기기만 받는 값(오늘 봉과 장 시간, 합친 차트, 7일 봉)을 캐시에서 이어받는다(v1.6). data.json에는 이 값이 없어서,
+ * 새 data.json 위에 이번 갱신에서 못 받은 값이 비어 차트가 다른 모양으로 바뀌던 것을 막는다.
+ * base에 이미 값이 있으면 그대로 둔다. 이번 갱신에 받은 값은 applyLiveQuotes가 덮어쓴다.
+ */
+fun withDeviceFields(base: MarketData, cached: MarketData?): MarketData {
+    val old = cached?.quotes?.associateBy { it.id } ?: return base
+    return base.copy(
+        quotes = base.quotes.map { quote ->
+            val prev = old[quote.id] ?: return@map quote
+            var q = quote
+            if (q.intraday.isEmpty()) {
+                q = q.copy(
+                    intraday = prev.intraday,
+                    intraday_times = prev.intraday_times,
+                    session_start = prev.session_start,
+                    session_end = prev.session_end,
+                )
+            }
+            if (q.combined == null) q = q.copy(combined = prev.combined)
+            if (q.week.isEmpty()) q = q.copy(week = prev.week, week_times = prev.week_times)
+            q
+        },
+    )
 }
 
 /** 현물 range=5d 5분봉 응답을 합친 차트 재료로 읽는다. 봉이 없거나 시각과 종가 수가 다르면 null. */
@@ -479,14 +580,16 @@ private fun latestEpisode(quote: Quote, price: Double, depth: Double?, updatedAt
 }
 
 /**
- * 합친 24시간 차트(S&P500·나스닥100). 이번 갱신에 재료(현물·선물 5일 5분봉)를 받았으면 새로 계산하고, 못 받았으면 null이다.
- * 낡은 합친 차트를 남기지 않기 위해서다(그러면 기존 오늘 차트를 그린다). 다른 지표는 그대로 둔다.
+ * 합친 24시간 차트(S&P500·나스닥100). 이번 갱신에 재료(현물·선물 5일 5분봉)를 받았으면 새로 계산한다.
+ * 못 받았거나 계산이 안 되면 직전 차트를 그 창이 끝날 때까지 쓰고, 창이 지났으면 null(기존 오늘 차트)이다. 다른 지표는 그대로 둔다.
  */
 private fun combinedAfter(quote: Quote, live: LiveQuote, now: Long?): CombinedChart? {
     if (quote.id !in COMBINED_FUTURES) return quote.combined
-    val source = live.combinedSource ?: return null
     if (now == null) return null
-    return combine24h(source.spot, source.futures, now)
+    // v1.6: 재료를 못 받은 갱신에서는 직전 합친 차트를 그 창(24시간)이 끝날 때까지 유지한다.
+    // 정규장만 그리는 차트로 바뀌어 가로축 시작이 튀던 것을 막는다.
+    val source = live.combinedSource ?: return quote.combined?.takeIf { now < it.end }
+    return combine24h(source.spot, source.futures, now) ?: quote.combined?.takeIf { now < it.end }
 }
 
 /**

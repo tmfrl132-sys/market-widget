@@ -3,9 +3,34 @@ package com.tmfrl.marketwidget.model
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 
-/** 일정 줄 맨 앞 이름표와 글자 크기(sp). 화면과 폭 추정이 같은 값을 쓴다. */
-const val EVENT_LINE_LABEL = "일정"
-const val EVENT_LINE_SP = 11
+/**
+ * 일정 줄 맨 앞 이름표와 글자 크기(sp). 화면과 폭 추정이 같은 값을 쓴다.
+ * v1.6: 누르면 전체 목록이 열린다는 것을 ▾로 알리고, 글자를 11sp에서 12sp로 키웠다.
+ */
+const val EVENT_LINE_LABEL = "일정 ▾"
+const val EVENT_LINE_SP = 12
+
+/** 중요도 최고 별 수. */
+const val MAX_EVENT_STARS = 3
+
+/**
+ * 일정 중요도(별 1~3, v1.6). 제목의 낱말로 정한다. 기준은 발표 당일 시장이 움직이는 정도에 대한 일반적인 인식이다.
+ * ★★★ FOMC·CPI·고용보고서, ★★ 한국은행 금리 결정·PCE, ★ GDP. 모르는 일정은 0(별 없음).
+ */
+private val EVENT_STARS: List<Pair<String, Int>> = listOf(
+    "FOMC" to 3,
+    "CPI" to 3,
+    "고용보고서" to 3,
+    "한국은행" to 2,
+    "금리 결정" to 2,
+    "PCE" to 2,
+    "GDP" to 1,
+)
+
+fun eventStars(title: String): Int = EVENT_STARS.filter { title.contains(it.first) }.maxOfOrNull { it.second } ?: 0
+
+/** "★★★". 0이면 빈 문자열. */
+fun formatStars(stars: Int): String = "★".repeat(stars.coerceIn(0, MAX_EVENT_STARS))
 
 /** 이름표와 첫 일정 사이 간격(dp). */
 const val EVENT_LINE_GAP_DP = 6
@@ -30,8 +55,9 @@ private const val BOK_SHORT = "한은 "
  * 일정 줄의 하루치. title은 같은 날 일정을 묶은 제목, dday는 오늘·내일·D-n이다.
  * soon은 오늘·내일 일정이라 색으로 강조한다는 뜻이다.
  */
-data class EventDay(val date: LocalDate, val title: String, val dday: String, val soon: Boolean) {
-    val text: String get() = "${formatEventDate(date)} $title $dday"
+data class EventDay(val date: LocalDate, val title: String, val dday: String, val soon: Boolean, val stars: Int = 0) {
+    /** 예: "11/26(목) 한은 금리 결정 ★★ D-8". stars는 그날 일정 중 가장 높은 중요도다. */
+    val text: String get() = listOf(formatEventDate(date), title, formatStars(stars), dday).filter { it.isNotEmpty() }.joinToString(" ")
 }
 
 /** 화면에 색을 나눠 그릴 두 조각. 오늘·내일은 언제나 앞쪽이라 조각 둘이면 충분하다. */
@@ -72,7 +98,7 @@ fun eventDays(events: List<Event>, today: LocalDate): List<EventDay> =
         .mapNotNull { (date, sameDay) ->
             val title = mergeEventTitles(sameDay)
             if (title.isEmpty()) return@mapNotNull null
-            EventDay(date, title, formatDday(date, today), isSoonEvent(date, today))
+            EventDay(date, title, formatDday(date, today), isSoonEvent(date, today), sameDay.maxOf { eventStars(it.title) })
         }
 
 /**
@@ -83,6 +109,7 @@ fun estimateTextWidthDp(text: String, fontSp: Float): Float =
     text.sumOf { charWidthEm(it).toDouble() }.toFloat() * fontSp
 
 private fun charWidthEm(c: Char): Float = when (c) {
+    '▾' -> 0.7f
     ' ' -> 0.3f
     in '0'..'9' -> 0.6f
     in 'A'..'Z' -> 0.72f

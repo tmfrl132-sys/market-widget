@@ -6,6 +6,9 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDateTime
+import java.time.OffsetDateTime
+import java.time.ZoneId
+import java.time.ZonedDateTime
 import java.util.TimeZone
 
 class LiveQuoteTest {
@@ -606,6 +609,76 @@ class LiveQuoteTest {
         // 카드 숫자는 현물 시세 그대로다(장외에는 차트 현재값과 다르다)
         assertEquals(7592.4, merged[0].price!!, 0.0)
         assertNull(merged[1].combined)
+    }
+
+    @Test fun apply_withoutFuturesKeepsPreviousCombinedUntilWindowEnds() {
+        val now = OffsetDateTime.parse(realUpdatedAt).toEpochSecond()
+        val current = CombinedChart(times = listOf(1, 2), values = listOf(1.0, 2.0), start = now - 3600, end = now + 3600)
+        val old = quote("GSPC", 7600.0).copy(combined = current)
+        val live = mapOf("GSPC" to LiveQuote(7592.4, -26.98, -0.35, 7619.38))
+        assertEquals(current, applyLiveQuotes(MarketData("old", listOf(old), emptyList()), live, realUpdatedAt).quotes[0].combined)
+        val ended = old.copy(combined = current.copy(end = now - 1))
+        assertNull(applyLiveQuotes(MarketData("old", listOf(ended), emptyList()), live, realUpdatedAt).quotes[0].combined)
+    }
+
+    private fun ny(day: Int, hour: Int, minute: Int = 0): Long =
+        ZonedDateTime.of(2026, 11, day, hour, minute, 0, 0, ZoneId.of("America/New_York")).toEpochSecond()
+
+    @Test fun anchoredDay_keepsBarsFromNewYorkOpenAndEndsAtNextOpen() {
+        // 11/17(화) 뉴욕 09:30 창. 월요일 밤 봉과 09:25 봉은 앞 창이다.
+        val stamps = listOf(ny(16, 20), ny(17, 9, 25), ny(17, 9, 30), ny(17, 9, 35), ny(17, 10))
+        val series = parseAnchoredDay(chart("1.0", ny(17, 10), stamps, "[1.0, 2.0, 3.0, 4.0, 5.0]"), NEW_YORK_OPEN, ny(17, 10, 5))
+        assertEquals(listOf(3.0, 4.0, 5.0), series.values)
+        assertEquals(listOf(ny(17, 9, 30), ny(17, 9, 35), ny(17, 10)), series.times)
+        assertEquals(ny(17, 9, 30), series.sessionStart)
+        assertEquals(ny(18, 9, 30), series.sessionEnd)
+    }
+
+    @Test fun anchoredDay_stepsBackWhenNewWindowHasFewerThanTwoBars() {
+        val stamps = listOf(ny(16, 20), ny(17, 9, 25), ny(17, 9, 30))
+        val series = parseAnchoredDay(chart("1.0", ny(17, 9, 30), stamps, "[1.0, 2.0, 3.0]"), NEW_YORK_OPEN, ny(17, 9, 31))
+        assertEquals(listOf(1.0, 2.0, 3.0), series.values)
+        assertEquals(ny(16, 9, 30), series.sessionStart)
+        assertEquals(ny(17, 9, 30), series.sessionEnd)
+    }
+
+    @Test fun anchoredDay_weekendShowsFridayWindowAndSeoulAnchorForFx() {
+        // 11/20(금) 16:55가 마지막 봉, 지금은 토요일
+        val stamps = listOf(ny(20, 9, 30), ny(20, 16, 55))
+        val friday = parseAnchoredDay(chart("1.0", ny(20, 16, 55), stamps, "[1.0, 2.0]"), NEW_YORK_OPEN, ny(21, 12))
+        assertEquals(ny(20, 9, 30), friday.sessionStart)
+        // 서울 09:00 창: 11/18 08:55 봉은 앞 창, 09:00부터 이번 창
+        val seoul = { day: Int, hour: Int, minute: Int -> ZonedDateTime.of(2026, 11, day, hour, minute, 0, 0, SEOUL).toEpochSecond() }
+        val fx = listOf(seoul(18, 8, 55), seoul(18, 9, 0), seoul(18, 9, 5))
+        val krw = parseAnchoredDay(chart("1.0", seoul(18, 9, 5), fx, "[1.0, 2.0, 3.0]"), SEOUL_FX_OPEN, seoul(18, 9, 10))
+        assertEquals(listOf(2.0, 3.0), krw.values)
+        assertEquals(seoul(18, 9, 0), krw.sessionStart)
+        assertEquals(seoul(19, 9, 0), krw.sessionEnd)
+        assertEquals(IntradaySeries(), parseAnchoredDay("""{"chart": {"result": null}}""", NEW_YORK_OPEN, 0))
+    }
+
+    @Test fun anchoredDays_coverTwentyFourHourIndicatorsOnly() {
+        assertEquals(setOf("VIX", "DXY", "TNX", "CL", "GC", "KRW"), ANCHORED_DAYS.keys)
+        assertEquals(SEOUL_FX_OPEN, ANCHORED_DAYS["KRW"])
+    }
+
+    @Test fun deviceFields_comeFromCacheOnlyWhenMissing() {
+        val cached = Quote(
+            "GC", "금", 1.0, 0.0, 0.0, intraday = listOf(1.0, 2.0), intraday_times = listOf(1L, 2L), session_start = 0, session_end = 10,
+            week = listOf(3.0), week_times = listOf(3L), combined = CombinedChart(values = listOf(9.0)),
+        )
+        val fresh = Quote("GC", "금", 2.0, 0.0, 0.0)
+        val merged = withDeviceFields(MarketData("new", listOf(fresh, quote("BTC", 1.0)), emptyList()), MarketData("old", listOf(cached), emptyList()))
+        val gold = merged.quotes[0]
+        assertEquals(2.0, gold.price!!, 0.0)
+        assertEquals(listOf(1.0, 2.0), gold.intraday)
+        assertEquals(10L, gold.session_end)
+        assertEquals(listOf(3.0), gold.week)
+        assertEquals(listOf(9.0), gold.combined!!.values)
+        assertEquals(quote("BTC", 1.0), merged.quotes[1])
+        val own = fresh.copy(intraday = listOf(7.0))
+        assertEquals(listOf(7.0), withDeviceFields(MarketData("new", listOf(own), emptyList()), MarketData("old", listOf(cached), emptyList())).quotes[0].intraday)
+        assertEquals(fresh, withDeviceFields(MarketData("new", listOf(fresh), emptyList()), null).quotes[0])
     }
 
     @Test fun apply_withoutFuturesClearsPreviousCombined() {

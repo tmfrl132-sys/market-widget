@@ -1,7 +1,9 @@
 package com.tmfrl.marketwidget.data
 
 import android.content.Context
+import com.tmfrl.marketwidget.model.ANCHORED_DAYS
 import com.tmfrl.marketwidget.model.COMBINED_FUTURES
+import com.tmfrl.marketwidget.model.DailyAnchor
 import com.tmfrl.marketwidget.model.CombinedSource
 import com.tmfrl.marketwidget.model.IntradaySeries
 import com.tmfrl.marketwidget.model.LIVE_SYMBOLS
@@ -11,6 +13,8 @@ import com.tmfrl.marketwidget.model.NAVER_CODES
 import com.tmfrl.marketwidget.model.WEEK_SECONDS
 import com.tmfrl.marketwidget.model.WeekSeries
 import com.tmfrl.marketwidget.model.applyLiveQuotes
+import com.tmfrl.marketwidget.model.parseAnchoredDay
+import com.tmfrl.marketwidget.model.withDeviceFields
 import com.tmfrl.marketwidget.model.encodeMarketData
 import com.tmfrl.marketwidget.model.parseFuturesSeries
 import com.tmfrl.marketwidget.model.parseIntraday
@@ -60,12 +64,14 @@ class Repository(
 ) {
 
     suspend fun refresh(): MarketData? = withContext(Dispatchers.IO) {
+        val previous = cached()
         val base = try {
-            parseMarketData(fetch())
+            // 기기만 받는 값(오늘 봉, 합친 차트, 7일 봉)은 data.json에 없어 캐시에서 이어받는다
+            withDeviceFields(parseMarketData(fetch()), previous)
         } catch (e: IOException) {
-            cached()
+            previous
         } catch (e: IllegalArgumentException) { // 잘못된 JSON (SerializationException 포함)
-            cached()
+            previous
         }
         val data = base?.let { applyLiveQuotes(it, fetchLive(), now()) }
         if (data != null) writeAtomic(cacheFile, encodeMarketData(data))
@@ -90,7 +96,8 @@ class Repository(
             val nowSeconds = System.currentTimeMillis() / 1000
             LIVE_SYMBOLS.map { (id, symbol) ->
                 async(Dispatchers.IO) {
-                    val live = NAVER_CODES[id]?.let(::fetchNaver) ?: fetchYahoo(symbol, COMBINED_FUTURES[id])
+                    val live = NAVER_CODES[id]?.let(::fetchNaver)
+                        ?: fetchYahoo(symbol, COMBINED_FUTURES[id], ANCHORED_DAYS[id], nowSeconds)
                     live?.let { id to it.copy(week = fetchWeek(encode(symbol), nowSeconds)) }
                 }
             }.awaitAll().filterNotNull().toMap()
@@ -105,11 +112,16 @@ class Repository(
 
         private fun encode(symbol: String): String = URLEncoder.encode(symbol, "UTF-8")
 
-        /** futuresSymbol이 있으면(S&P500·나스닥100) 5일 5분봉과 그 선물 5일 5분봉도 받아 합친 차트 재료를 붙인다. */
-        private fun fetchYahoo(symbol: String, futuresSymbol: String?): LiveQuote? = orElse(null) {
+        /**
+         * futuresSymbol이 있으면(S&P500·나스닥100) 5일 5분봉과 그 선물 5일 5분봉도 받아 합친 차트 재료를 붙인다.
+         * anchor가 있으면(v1.6) 5일 5분봉에서 고정 24시간 창(정규장 시작 → 다음 정규장 시작)을 오늘 차트로 쓴다.
+         */
+        private fun fetchYahoo(symbol: String, futuresSymbol: String?, anchor: DailyAnchor?, nowSeconds: Long): LiveQuote? = orElse(null) {
             val encoded = encode(symbol)
             val live = parseLiveQuote(httpGet(YAHOO_URL.format(encoded))) ?: return@orElse null
-            if (futuresSymbol == null) {
+            if (anchor != null) {
+                live.withIntraday(orElse(IntradaySeries()) { parseAnchoredDay(httpGet(INTRADAY_5D_URL.format(encoded)), anchor, nowSeconds) })
+            } else if (futuresSymbol == null) {
                 // 5분봉이 실패해도 시세는 살린다
                 live.withIntraday(orElse(IntradaySeries()) { parseIntraday(httpGet(INTRADAY_URL.format(encoded))) })
             } else {

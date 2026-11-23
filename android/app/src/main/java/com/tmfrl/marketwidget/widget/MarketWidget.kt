@@ -71,6 +71,9 @@ import com.tmfrl.marketwidget.model.chartSummary
 import com.tmfrl.marketwidget.model.combinedBands
 import com.tmfrl.marketwidget.model.combinedChartFor
 import com.tmfrl.marketwidget.model.combinedXAxis
+import com.tmfrl.marketwidget.model.ANCHORED_DAYS
+import com.tmfrl.marketwidget.model.anchoredStartLabel
+import com.tmfrl.marketwidget.model.timeGapBreaks
 import com.tmfrl.marketwidget.model.afterCloseChartFor
 import com.tmfrl.marketwidget.model.combinedCloseMark
 import com.tmfrl.marketwidget.model.combinedStartLabel
@@ -118,6 +121,8 @@ import com.tmfrl.marketwidget.work.AutoTick
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.ZonedDateTime
+import androidx.glance.appwidget.CheckBox
+import androidx.glance.appwidget.CheckboxDefaults
 import androidx.glance.appwidget.RadioButton
 import androidx.glance.appwidget.RadioButtonDefaults
 import com.tmfrl.marketwidget.model.Period
@@ -135,6 +140,9 @@ import com.tmfrl.marketwidget.model.afterEventLineTap
 import com.tmfrl.marketwidget.model.eventDays
 import com.tmfrl.marketwidget.model.eventDaysFitting
 import com.tmfrl.marketwidget.model.eventLineText
+import com.tmfrl.marketwidget.model.MAX_EVENT_STARS
+import com.tmfrl.marketwidget.model.eventStars
+import com.tmfrl.marketwidget.model.formatStars
 import com.tmfrl.marketwidget.model.eventLineWidthDp
 import com.tmfrl.marketwidget.model.eventListPage
 import com.tmfrl.marketwidget.model.eventListVisible
@@ -146,7 +154,7 @@ import com.tmfrl.marketwidget.model.tileTapSelection
 import com.tmfrl.marketwidget.model.widgetLayout
 import com.tmfrl.marketwidget.model.fitBitmap
 
-private val EVENT_ROW_HEIGHT = 24.dp
+private val EVENT_ROW_HEIGHT = 26.dp
 
 /** 차트 비트맵 픽셀 상한. RGB_565라 약 500KB. */
 private const val MAX_CHART_PIXELS = 250_000
@@ -292,6 +300,14 @@ class SelectPeriodAction : ActionCallback {
         val name = parameters[PERIOD_NAME] ?: return
         updateAppWidgetState(context, glanceId) { it[PERIOD] = name }
         MarketWidget().update(context, glanceId)
+    }
+}
+
+/** 차트 머리줄의 MDD 체크박스(v1.6). 설정 화면의 "MDD 표시"와 같은 값이라 모든 위젯에 같이 적용된다. */
+class ToggleDrawdownAction : ActionCallback {
+    override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
+        SettingsStore.forContext(context).update { it.copy(show_drawdown = !it.show_drawdown) }
+        redrawAllWidgets(context)
     }
 }
 
@@ -570,7 +586,8 @@ private fun EventLine(text: EventLineText, tappable: Boolean) {
         modifier = if (tappable) base.clickable(actionRunCallback<ToggleEventsAction>()) else base,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(EVENT_LINE_LABEL, style = style(SUBTLE, EVENT_LINE_SP, bold = true), maxLines = 1)
+        // 누를 수 없는 작은 크기에서는 ▾를 빼고 "일정"만 쓴다
+        Text(if (tappable) EVENT_LINE_LABEL else EVENT_LINE_LABEL.substringBefore(' '), style = style(SUBTLE, EVENT_LINE_SP, bold = true), maxLines = 1)
         Spacer(GlanceModifier.width(EVENT_LINE_GAP_DP.dp))
         if (text.soon.isNotEmpty()) {
             Text(text.soon, style = style(EVENT_SOON, EVENT_LINE_SP, bold = true), maxLines = 1)
@@ -726,6 +743,8 @@ private fun ChartPanel(
     val density = LocalContext.current.resources.displayMetrics.density
     // 잠수 차트. 오늘, 낙폭 없는 지표(원/달러·달러인덱스·미 10년물·VIX), 점이 모자라면 null이다.
     // 설정에서 MDD 표시를 끄면 null로 두어 낙폭 줄, 잠수 차트, 최대 낙폭 구간 칠, 고점·바닥 점을 모두 그리지 않는다.
+    // MDD 체크박스는 이 지표·기간에 낙폭을 그릴 수 있을 때만 보인다(끈 상태에서도 다시 켤 수 있게 설정과 따로 계산한다)
+    val drawdownAvailable = drawdownChart(quote, period) != null
     val drawdown = if (showDrawdown) drawdownChart(quote, period) else null
     // 차트 그림 높이 = 칸 높이 - 위 두 줄(이름·최저최고) - 낙폭 줄 - 아래 두 줄(기간 표시, 기간 선택)
     val imagesHeight = maxOf(40.dp, height - (if (drawdown != null) 100.dp else 84.dp))
@@ -784,7 +803,8 @@ private fun ChartPanel(
         gutterPx = gutter,
         shade = shade,
         dots = dots,
-        breaks = combined?.breaks.orEmpty(),
+        // 고정 24시간 창(v1.6)의 정비 시간·주말은 선을 끊는다
+        breaks = combined?.breaks ?: if (today) timeGapBreaks(quote.intraday_times, values.size) else emptyList(),
         bands = combined?.let(::combinedBands).orEmpty(),
         // 장마감 지점: 세로 점선 대신 선 위 점과 "장마감 7,417"(v1.3). 창 밖이면 없다.
         marks = listOfNotNull(combined?.let(::combinedCloseMark)),
@@ -818,6 +838,17 @@ private fun ChartPanel(
             // 합친 차트의 마지막 점이 선물 환산값이면 그 봉 시각을 작게 알린다
             combined?.let(::convertedLabel)?.let { Text("  $it", style = style(SUBTLE, 9), maxLines = 1) }
             Spacer(GlanceModifier.defaultWeight())
+            if (drawdownAvailable) {
+                CheckBox(
+                    checked = showDrawdown,
+                    onCheckedChange = actionRunCallback<ToggleDrawdownAction>(),
+                    text = "MDD",
+                    style = style(if (showDrawdown) TEXT else SUBTLE, 11, bold = showDrawdown),
+                    colors = CheckboxDefaults.colors(checkedColor = ColorProvider(DOWN), uncheckedColor = ColorProvider(SUBTLE)),
+                    maxLines = 1,
+                )
+                Spacer(GlanceModifier.width(6.dp))
+            }
             Box(modifier = GlanceModifier.background(tint).cornerRadius(6.dp).padding(horizontal = 6.dp, vertical = 2.dp)) {
                 Text(
                     (if (afterClose != null) "마감 후 " else "") + "${formatChangeBadge(changePct)} (${formatSignedAmount(change)})",
@@ -872,6 +903,8 @@ private fun ChartPanel(
         Row(modifier = GlanceModifier.fillMaxWidth().padding(top = 2.dp)) {
             val startLabel = when {
                 combined != null -> combinedStartLabel(combined)
+                // 고정 24시간 창(v1.6)은 창 시작의 서울 시각, 예: "23:30~"
+                today && quote.id in ANCHORED_DAYS && quote.session_start != null -> anchoredStartLabel(quote.session_start)
                 period == Period.MAX && quote.max_start != null -> "${quote.max_start}년~"
                 else -> period.agoLabel
             }
@@ -1071,9 +1104,18 @@ private fun EventList(page: EventListPage, today: LocalDate) {
                 Text(formatDday(date, today), style = style(if (soon) EVENT_SOON else TEXT, 10, bold = true))
             }
             Spacer(GlanceModifier.width(8.dp))
-            Text("${flagOf(event.country)} ${event.title}", style = style(TEXT, 12, bold = soon), maxLines = 1)
+            Text("${flagOf(event.country)} ${event.title}", style = style(TEXT, 13, bold = soon), maxLines = 1)
+            // 중요도 별(v1.6). 빈 별로 자리를 맞춰 세로로 읽기 쉽게 한다.
+            val stars = eventStars(event.title)
+            if (stars > 0) {
+                Text(
+                    "  " + formatStars(stars) + "☆".repeat(MAX_EVENT_STARS - stars),
+                    style = style(EVENT_SOON, 12, bold = true),
+                    maxLines = 1,
+                )
+            }
             Spacer(GlanceModifier.defaultWeight())
-            Text(formatEventDate(date), style = style(SUBTLE, 11))
+            Text(formatEventDate(date), style = style(SUBTLE, 12))
         }
     }
     // 자식은 제목, 간격, 일정 7줄, 이 줄까지 10개로 Glance 한도 안이다

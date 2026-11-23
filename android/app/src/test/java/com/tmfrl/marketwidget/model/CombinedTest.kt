@@ -725,4 +725,10 @@ class CombinedTest {
         /** 2026-11-13 09:05:04 뉴욕(23:05:04 서울). 실제 자료를 받은 시각. */
         const val REAL_NOW = 1794578704L
     }
+
+    @Test fun timeGapBreaks_splitAtGapsLongerThanTenMinutes() {
+        assertEquals(listOf(2), timeGapBreaks(listOf(0L, 300L, 1500L, 1800L), 4))
+        assertEquals(emptyList<Int>(), timeGapBreaks(listOf(0L, 600L), 2))
+        assertEquals(emptyList<Int>(), timeGapBreaks(listOf(0L, 5000L), 3))
+    }
 }

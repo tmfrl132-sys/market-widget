@@ -29,6 +29,13 @@ private val REGULAR_CLOSE = LocalTime.of(16, 0)
 /** 이웃한 점의 시각 차이가 이보다 크면 선을 끊는다(정비 시간, 주말, 휴장, 빈 봉). 자정 앞뒤 10분 빈 봉은 잇는다. */
 const val COMBINED_GAP_SECONDS = 600L
 
+/**
+ * 오늘 차트에서 선을 끊을 점 위치(그 점 앞에서 끊는다). 이웃한 봉의 시각 차이가 COMBINED_GAP_SECONDS보다 크면 끊는다(v1.6).
+ * 고정 24시간 창의 정비 시간·주말을 직선으로 잇지 않기 위해서다. 시각 수가 값 수와 다르면 끊지 않는다.
+ */
+fun timeGapBreaks(times: List<Long>, valueCount: Int): List<Int> =
+    if (times.size != valueCount) emptyList() else (1 until times.size).filter { times[it] - times[it - 1] > COMBINED_GAP_SECONDS }
+
 /** 장 마감 종가와 짝지을 선물 봉을 찾는 범위. 같은 시각 봉이 없을 때 앞뒤 5분 안에서 가장 가까운 봉을 쓴다. */
 private const val SAME_TIME_TOLERANCE = 300L
 
@@ -265,8 +272,10 @@ fun combinedCloseMark(chart: CombinedChart): Pair<Int, String>? {
 private val START_TIME_FORMAT = DateTimeFormatter.ofPattern("HH:mm")
 
 /** 합친 차트 아래 왼쪽 문구. 창 시작(뉴욕 09:30)의 서울 시각, 예: "23:30~"(서머타임 "22:30~"). */
-fun combinedStartLabel(chart: CombinedChart): String =
-    Instant.ofEpochSecond(chart.start).atZone(SEOUL).format(START_TIME_FORMAT) + "~"
+fun combinedStartLabel(chart: CombinedChart): String = anchoredStartLabel(chart.start)
+
+/** 고정 창 시작의 서울 시각 문구, 예: "23:30~", "09:00~". */
+fun anchoredStartLabel(start: Long): String = Instant.ofEpochSecond(start).atZone(SEOUL).format(START_TIME_FORMAT) + "~"
 
 /**
  * 그릴 합친 차트. S&P500·나스닥100의 오늘 기간이고 값이 온전할 때만 돌려준다. 아니면 null(기존 오늘 차트를 그린다).

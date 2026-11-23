@@ -106,9 +106,10 @@ class RepositoryTest {
         val first = repo.refresh()!!.quotes.single().combined!!
         assertEquals(7624.8, first.price, 0.0)
         assertEquals(first, repo.cached()!!.quotes.single().combined)
-        // 선물을 못 받은 갱신에서는 낡은 합친 차트를 지운다
+        // v1.6: 선물을 못 받은 갱신에서도 창(24시간)이 끝나기 전이면 직전 합친 차트를 유지한다.
+        // data.json에는 합친 차트가 없어서 캐시에서 이어받는다.
         withFutures = false
-        assertNull(repo.refresh()!!.quotes.single().combined)
+        assertEquals(first, repo.refresh()!!.quotes.single().combined)
     }
 
     @Test fun cached_missing_file_is_null() {
