@@ -122,6 +122,12 @@ import com.tmfrl.marketwidget.model.movingAveragePeriods
 import com.tmfrl.marketwidget.model.supportsTrend
 import com.tmfrl.marketwidget.model.volumesFor
 import com.tmfrl.marketwidget.model.yearRange
+import com.tmfrl.marketwidget.model.Event
+import com.tmfrl.marketwidget.model.eventMarks
+import com.tmfrl.marketwidget.model.SEOUL
+import com.tmfrl.marketwidget.model.eventDate
+import com.tmfrl.marketwidget.model.eventTime
+import com.tmfrl.marketwidget.model.latestEventImpact
 import com.tmfrl.marketwidget.model.RSI_PERIOD
 import com.tmfrl.marketwidget.model.bollinger
 import com.tmfrl.marketwidget.model.candlesFor
@@ -216,6 +222,10 @@ private val VOLUME_UP = Color(0x99FF5A5F)
 private val VOLUME_DOWN = Color(0x994D8DFF)
 
 /** 거래량 눈금 숫자. 1억 이상 "1.2억", 1만 이상 "350만", 그 아래는 정수. */
+/** 초 단위 epoch의 서울 시각 "22:30". */
+private fun formatSeoulTime(epochSeconds: Long): String =
+    java.time.Instant.ofEpochSecond(epochSeconds).atZone(SEOUL).format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
+
 private fun formatVolume(value: Double): String = when {
     value >= 1e8 -> String.format(java.util.Locale.US, "%.1f억", value / 1e8)
     value >= 1e4 -> String.format(java.util.Locale.US, "%.0f만", value / 1e4)
@@ -596,7 +606,7 @@ private fun QuotesAndDetail(
                 val other = if (auto) null else data.quotes.firstOrNull { it.id == selection.compare && it.id != chosen.id }
                 val state = asOf?.let { marketState(chosen, it) }
                 ChartPanel(
-                    chosen, other, !auto && selection.picking, state, period, logScale, auto, options,
+                    chosen, other, !auto && selection.picking, state, period, logScale, auto, options, data.events,
                     size.width - 20.dp, detailHeight, GlanceModifier.defaultWeight(),
                 )
             } else if (chosen != null) {
@@ -791,7 +801,7 @@ private enum class CompareButton { OFF, PICKING, ON }
 @Composable
 private fun ChartPanel(
     quote: Quote, other: Quote?, picking: Boolean, state: MarketState?, period: Period, logScale: Boolean, auto: Boolean,
-    options: WidgetSettings, width: Dp, height: Dp, modifier: GlanceModifier,
+    options: WidgetSettings, events: List<Event>, width: Dp, height: Dp, modifier: GlanceModifier,
 ) {
     val series = other?.let { compareSeries(quote, it, period) }
     if (other != null && series != null) {
@@ -854,6 +864,18 @@ private fun ChartPanel(
     val maPeriods = movingAveragePeriods(period)
     val maLines = if (options.show_ma && trendAvailable && logChart == null) maPeriods.map { tail(movingAverage(indicatorBase, it)) } else null
     val volumeBars = if (options.show_volume) volumes else null
+    // 로그 값도 개수가 같아 같은 눈금을 쓴다
+    val xAxis = combined?.let(::combinedXAxis) ?: chartXAxis(quote, period)
+    val breaks = breaksFor(combined, today, quote, values.size)
+    // 오늘 차트의 지표 발표 시각(v1.8): 창 안의 발표는 세로 점선, 가장 최근 발표는 그 뒤 등락·최저를 한 줄로 보인다
+    val window = when {
+        combined != null -> Triple(combined.times, combined.start, combined.end)
+        today && xAxis.positions != null && quote.session_start != null && quote.session_end != null ->
+            Triple(quote.intraday_times, quote.session_start, quote.session_end)
+        else -> null
+    }
+    val eventLines = window?.let { (_, start, end) -> eventMarks(events, start, end) }.orEmpty()
+    val impact = window?.let { (times, _, _) -> latestEventImpact(eventLines, times, values) }
     // 체크박스(v1.7.1): 차트 오른쪽에 세로로 놓는다. 가격 차트에 겹치는 것(캔들·이평·볼린저·MDD) 다음 아래 칸(거래량·RSI·MACD·HV) 순서다.
     val optionItems = listOfNotNull(
         if (candlesAvailable) Triple(OPTION_CANDLES, "캔들", options.show_candles) else null,
@@ -868,11 +890,13 @@ private fun ChartPanel(
     // 차트 그림 높이 = 칸 높이 - 위 두 줄(이름·최저최고) - 낙폭 줄 - 이평 범례 - 아래 두 줄(기간 표시, 기간 선택)
     val imagesHeight = maxOf(
         40.dp,
-        height - (if (drawdown != null) 100.dp else 84.dp) - (if (maLines != null) LEGEND_HEIGHT else 0.dp),
+        height - (if (drawdown != null) 100.dp else 84.dp) - (if (maLines != null) LEGEND_HEIGHT else 0.dp) -
+            (if (impact != null) 16.dp else 0.dp),
     )
     // 차트 높이에 들어가는 만큼 한 열에 넣고, 넘치면 열을 하나 더 둔다(좁은 위젯)
     // 체크박스 열 높이 = 그림 + 이평 범례 + 낙폭 줄(16dp)
-    val optionsHeight = imagesHeight + (if (maLines != null) LEGEND_HEIGHT else 0.dp) + (if (drawdown != null) 16.dp else 0.dp)
+    val optionsHeight = imagesHeight + (if (maLines != null) LEGEND_HEIGHT else 0.dp) + (if (drawdown != null) 16.dp else 0.dp) +
+        (if (impact != null) 16.dp else 0.dp)
     val perColumn = maxOf(1, (optionsHeight / OPTION_ITEM_HEIGHT).toInt())
     val optionColumns = optionItems.chunked(perColumn)
     val chartWidth = width - OPTION_COLUMN_WIDTH * optionColumns.size
@@ -947,8 +971,6 @@ private fun ChartPanel(
     val shade = drawdown?.let { chart -> chart.episode?.let { it.peak..(it.recovery ?: chart.depths.lastIndex) } }
     val dots = episode?.let { listOf(it.peak to TEXT.toArgb(), it.trough to DOWN.toArgb()) }.orEmpty()
     // 로그 값도 개수가 같아 같은 눈금을 쓴다. 아래 칸이 있으면 가로축 글자는 맨 아래 칸에만 두고 나머지는 세로 보조선만 그린다.
-    val xAxis = combined?.let(::combinedXAxis) ?: chartXAxis(quote, period)
-    val breaks = breaksFor(combined, today, quote, values.size)
     val bitmap = detailBitmap(
         priceValues, color, bw, priceBh, scale, density,
         priceBaseline,
@@ -967,6 +989,7 @@ private fun ChartPanel(
         bands = combined?.let(::combinedBands).orEmpty(),
         // 장마감 지점: 세로 점선 대신 선 위 점과 "장마감 7,417"(v1.3). 창 밖이면 없다.
         marks = listOfNotNull(combined?.let(::combinedCloseMark)),
+        vlines = eventLines.map { it.position to it.label },
     )
     // 아래 칸 그림. 모두 가격 차트와 점이 1:1이고 폭·숫자 칸이 같아 시점이 맞는다.
     val lowerBitmaps = lowers.map { key ->
@@ -1084,6 +1107,15 @@ private fun ChartPanel(
             // 자식은 낙폭 줄, 이평 범례, 가격 차트, 아래 칸 최대 5개로 8개 이하다.
             // v1.7.2: 낙폭 줄을 그림 열 안에 둬서 MDD를 켜고 꺼도 오른쪽 체크박스 위치가 바뀌지 않는다.
             Column(modifier = GlanceModifier.defaultWeight().fillMaxHeight()) {
+                if (impact != null) {
+                    // 예: "CPI 22:30 이후 ▼0.85% · 최저 ▼1.20%". 발표 직전 가격 대비다.
+                    Text(
+                        "${impact.label} ${formatSeoulTime(impact.time)} 이후 ${formatChangeBadge(impact.change)}" +
+                            "  ·  최저 ${formatChangeBadge(impact.low)}",
+                        style = style(trendColors(impact.change).first, 11, bold = true),
+                        maxLines = 1,
+                    )
+                }
                 if (drawdown != null) {
                     Text(
                         "고점 대비 ${formatDrawdown(drawdown.current)}  ·  MDD ${formatDrawdown(drawdown.mdd)}" +
@@ -1249,8 +1281,11 @@ private fun detailBitmap(
     histogram: List<Double>? = null,
     histogramColors: List<Int> = emptyList(),
     hideLine: Boolean = false,
+    vlines: List<Pair<Float, String>> = emptyList(),
 ): Bitmap {
     return renderLine(
+        vlines = vlines,
+        vlineColor = COMPARE_LINE.toArgb(),
         histogram = histogram,
         histogramColors = histogramColors,
         hideLine = hideLine,
@@ -1349,7 +1384,8 @@ private fun EventList(page: EventListPage, today: LocalDate) {
         Text("한 달 안에 예정된 발표가 없습니다", style = style(SUBTLE, 12))
     }
     page.events.forEach { event ->
-        val date = LocalDate.parse(event.date)
+        // 시각이 있으면 서울 날짜·시각으로 보인다(v1.8, FOMC는 미국 날짜 다음 날 새벽)
+        val date = eventDate(event) ?: return@forEach
         // 오늘·내일은 일정 줄과 같은 호박색이다. 빨강·파랑은 등락 전용이다.
         val soon = isSoonEvent(date, today)
         Row(
@@ -1377,7 +1413,7 @@ private fun EventList(page: EventListPage, today: LocalDate) {
                 )
             }
             Spacer(GlanceModifier.defaultWeight())
-            Text(formatEventDate(date), style = style(SUBTLE, 12))
+            Text(formatEventDate(date) + eventTime(event)?.let { " $it" }.orEmpty(), style = style(SUBTLE, 12))
         }
     }
     // 자식은 제목, 간격, 일정 7줄, 이 줄까지 10개로 Glance 한도 안이다

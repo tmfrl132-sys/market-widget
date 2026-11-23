@@ -2,8 +2,9 @@
 
 import json
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -54,3 +55,31 @@ def merge_events(*lists: list[dict]) -> list[dict]:
         for e in items:
             seen.setdefault((e["date"], e["title"]), e)
     return sorted(seen.values(), key=lambda e: (e["date"], e["title"]))
+
+
+# 발표 시각(v1.8). 일정 제목 -> (시간대, 현지 시각). 기관이 매번 같은 시각에 발표한다.
+# 미국 지표는 BLS·BEA 발표 08:30 ET, FOMC 성명은 14:00 ET, 한국은행 기준금리 결정은 10:00 KST(관행 기준, 확인 필요).
+EVENT_TIMES: dict[str, tuple[str, time]] = {
+    "미국 CPI": ("America/New_York", time(8, 30)),
+    "미국 고용보고서": ("America/New_York", time(8, 30)),
+    "미국 PCE": ("America/New_York", time(8, 30)),
+    "미국 GDP": ("America/New_York", time(8, 30)),
+    "FOMC 금리 결정": ("America/New_York", time(14, 0)),
+    "한국은행 금리 결정": ("Asia/Seoul", time(10, 0)),
+}
+SEOUL = ZoneInfo("Asia/Seoul")
+
+
+def with_times(items: list[dict]) -> list[dict]:
+    """일정에 서울 시각 "kst"(ISO, 예: 2026-12-10T22:30:00+09:00)를 붙인다. 시각을 모르는 일정은 그대로 둔다.
+    date는 현지(발표 기관) 날짜 그대로라 옛 앱도 같은 날짜로 보인다. 서머타임은 zoneinfo가 날짜마다 맞춘다."""
+    out = []
+    for e in items:
+        rule = EVENT_TIMES.get(e["title"])
+        if rule is None:
+            out.append(e)
+            continue
+        zone, at = rule
+        local = datetime.combine(date.fromisoformat(e["date"]), at, ZoneInfo(zone))
+        out.append({**e, "kst": local.astimezone(SEOUL).isoformat(timespec="seconds")})
+    return out

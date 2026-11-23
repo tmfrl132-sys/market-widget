@@ -35,7 +35,7 @@ def should_run(now: datetime) -> bool:
 def default_events(today) -> list[dict]:
     api_key = os.environ.get("FRED_API_KEY", "")
     fred = events.fetch_fred_events(api_key, today) if api_key else []
-    return events.merge_events(fred, events.load_fixed_events(events.SCHEDULE_PATH, today))
+    return events.with_times(events.merge_events(fred, events.load_fixed_events(events.SCHEDULE_PATH, today)))
 
 
 def build_data(now: datetime, prev: dict | None,

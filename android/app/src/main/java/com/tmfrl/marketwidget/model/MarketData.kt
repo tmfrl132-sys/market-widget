@@ -59,7 +59,12 @@ data class Quote(
 )
 
 @Serializable
-data class Event(val date: String, val title: String, val country: String)
+data class Event(
+    val date: String,
+    val title: String,
+    val country: String,
+    val kst: String? = null, // 발표 시각(서울, ISO). v1.8 수집기가 보낸다. 없으면 시각 없이 date만 쓴다
+)
 
 @Serializable
 data class MarketData(val updated_at: String, val quotes: List<Quote>, val events: List<Event>)

@@ -55,9 +55,17 @@ private const val BOK_SHORT = "한은 "
  * 일정 줄의 하루치. title은 같은 날 일정을 묶은 제목, dday는 오늘·내일·D-n이다.
  * soon은 오늘·내일 일정이라 색으로 강조한다는 뜻이다.
  */
-data class EventDay(val date: LocalDate, val title: String, val dday: String, val soon: Boolean, val stars: Int = 0) {
-    /** 예: "11/26(목) 한은 금리 결정 ★★ D-8". stars는 그날 일정 중 가장 높은 중요도다. */
-    val text: String get() = listOf(formatEventDate(date), title, formatStars(stars), dday).filter { it.isNotEmpty() }.joinToString(" ")
+data class EventDay(
+    val date: LocalDate,
+    val title: String,
+    val dday: String,
+    val soon: Boolean,
+    val stars: Int = 0,
+    val time: String? = null,
+) {
+    /** 예: "12/10(목) 22:30 미국 CPI ★★★ D-17". stars는 그날 가장 높은 중요도, time은 그날 가장 이른 서울 발표 시각(v1.8)이다. */
+    val text: String get() =
+        listOf(formatEventDate(date), time.orEmpty(), title, formatStars(stars), dday).filter { it.isNotEmpty() }.joinToString(" ")
 }
 
 /** 화면에 색을 나눠 그릴 두 조각. 오늘·내일은 언제나 앞쪽이라 조각 둘이면 충분하다. */
@@ -90,7 +98,7 @@ fun isSoonEvent(date: LocalDate, today: LocalDate): Boolean = ChronoUnit.DAYS.be
 
 /** 오늘(서울) 이후 일정을 날짜별로 묶어 가까운 순으로 돌려준다. 날짜를 읽을 수 없거나 제목이 빈 일정은 뺀다. */
 fun eventDays(events: List<Event>, today: LocalDate): List<EventDay> =
-    events.mapNotNull { event -> parseEventDate(event.date)?.takeIf { it >= today }?.let { it to event } }
+    events.mapNotNull { event -> eventDate(event)?.takeIf { it >= today }?.let { it to event } }
         .groupBy({ it.first }, { it.second })
         .entries
         // LocalDate는 Comparable<LocalDate>가 아니라 sortedBy에 바로 넘길 수 없다
@@ -98,7 +106,10 @@ fun eventDays(events: List<Event>, today: LocalDate): List<EventDay> =
         .mapNotNull { (date, sameDay) ->
             val title = mergeEventTitles(sameDay)
             if (title.isEmpty()) return@mapNotNull null
-            EventDay(date, title, formatDday(date, today), isSoonEvent(date, today), sameDay.maxOf { eventStars(it.title) })
+            EventDay(
+                date, title, formatDday(date, today), isSoonEvent(date, today), sameDay.maxOf { eventStars(it.title) },
+                sameDay.mapNotNull { eventTime(it) }.minOrNull(),
+            )
         }
 
 /**

@@ -45,6 +45,7 @@ import com.tmfrl.marketwidget.model.yPosition
  * guides는 문구 없는 가로 점선 값(RSI 70·30)이다.
  * histogram은 0에서 위아래로 세우는 막대(MACD 히스토그램, 거래량)이고 histogramColors(막대마다)로 칠한다. 세로축에 0과 함께 들어간다.
  * hideLine이면 선·영역·끝 점을 그리지 않는다(거래량 막대만).
+ * vlines는 세로 점선(가로 위치 0~1과 위쪽 문구, v1.8 지표 발표 시각)이고 vlineColor로 그린다.
  */
 fun renderLine(
     values: List<Double>,
@@ -84,6 +85,8 @@ fun renderLine(
     histogram: List<Double>? = null,
     histogramColors: List<Int> = emptyList(),
     hideLine: Boolean = false,
+    vlines: List<Pair<Float, String>> = emptyList(),
+    vlineColor: Int = 0,
 ): Bitmap {
     val w = widthPx.coerceAtLeast(2)
     val h = heightPx.coerceAtLeast(2)
@@ -141,6 +144,8 @@ fun renderLine(
         val grid = gridPaint(strokePx)
         xLabels.forEach { canvas.drawLine(it.x, 0f, it.x, plotH, grid) }
     }
+
+    if (detailed && vlines.isNotEmpty()) drawVlines(canvas, vlines, vlineColor, text, backgroundColor, plotW, plotH, pad, strokePx)
 
     val segments = splitAtMissing(lineSegments(points.size, breaks), values)
     val line = linePath(points, segments)
@@ -229,6 +234,30 @@ private fun drawCandles(
         val top = minOf(y(open), y(close))
         val bottom = maxOf(y(open), y(close)).coerceAtLeast(top + 1f)
         canvas.drawRect(x - half, top, x + half, bottom, paint)
+    }
+}
+
+/** 세로 점선과 그 위쪽 문구. 문구는 선 오른쪽에 두고, 그림 밖으로 나가면 왼쪽으로 옮긴다. */
+private fun drawVlines(
+    canvas: Canvas, vlines: List<Pair<Float, String>>, color: Int, text: Paint, backgroundColor: Int,
+    plotW: Float, plotH: Float, pad: Float, strokePx: Float,
+) {
+    val dash = strokePx * 2
+    val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        this.color = color
+        strokeWidth = (strokePx * 0.6f).coerceAtLeast(1f)
+        pathEffect = DashPathEffect(floatArrayOf(dash, dash), 0f)
+    }
+    val label = Paint(text).apply { this.color = color }
+    val size = text.textSize
+    vlines.forEach { (position, name) ->
+        val x = pad + position * (plotW - 2 * pad)
+        canvas.drawLine(x, 0f, x, plotH, line)
+        val width = label.measureText(name)
+        val left = if (x + size * 0.3f + width <= plotW) x + size * 0.3f else x - size * 0.3f - width
+        canvas.drawRect(left - size * 0.15f, 0f, left + width + size * 0.15f, size * 1.2f, Paint().apply { this.color = backgroundColor })
+        canvas.drawText(name, left, size, label)
     }
 }
 

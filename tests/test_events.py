@@ -68,3 +68,18 @@ def test_bundled_schedule_is_valid():
     for item in items:
         date.fromisoformat(item["date"])
         assert item["country"] in ("US", "KR")
+
+
+def test_with_times_adds_seoul_time_with_dst():
+    items = events.with_times([
+        {"date": "2026-12-10", "title": "미국 CPI", "country": "US"},      # 겨울: 08:30 ET = 22:30 KST
+        {"date": "2026-07-15", "title": "미국 CPI", "country": "US"},      # 여름: 08:30 EDT = 21:30 KST
+        {"date": "2026-12-09", "title": "FOMC 금리 결정", "country": "US"},  # 14:00 ET = 다음 날 04:00 KST
+        {"date": "2026-11-26", "title": "한국은행 금리 결정", "country": "KR"},
+        {"date": "2026-11-27", "title": "기타", "country": "US"},
+    ])
+    assert [e.get("kst") for e in items] == [
+        "2026-12-10T22:30:00+09:00", "2026-07-15T21:30:00+09:00", "2026-12-10T04:00:00+09:00",
+        "2026-11-26T10:00:00+09:00", None,
+    ]
+    assert items[2]["date"] == "2026-12-09"

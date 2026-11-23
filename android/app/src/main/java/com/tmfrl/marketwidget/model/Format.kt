@@ -77,9 +77,25 @@ fun parseEventDate(text: String): LocalDate? = try {
     null
 }
 
+/** 발표 시각(서울, v1.8). 시각이 없거나 읽을 수 없으면 null. */
+fun eventInstant(event: Event): java.time.Instant? = event.kst?.let {
+    try {
+        OffsetDateTime.parse(it).toInstant()
+    } catch (e: DateTimeParseException) {
+        null
+    }
+}
+
+/** 서울 기준 일정 날짜. 시각이 있으면 그 서울 날짜(FOMC는 미국 날짜 다음 날 새벽)이고, 없으면 date다. */
+fun eventDate(event: Event): LocalDate? =
+    eventInstant(event)?.atZone(SEOUL)?.toLocalDate() ?: parseEventDate(event.date)
+
+/** 서울 발표 시각 "22:30". 시각이 없으면 null. */
+fun eventTime(event: Event): String? = eventInstant(event)?.atZone(SEOUL)?.format(timeFormat)
+
 fun upcomingEvents(events: List<Event>, today: LocalDate, limit: Int = 4): List<Event> =
-    events.filter { event -> parseEventDate(event.date)?.let { it >= today } == true }
-        .sortedBy { it.date }
+    events.filter { event -> eventDate(event)?.let { it >= today } == true }
+        .sortedWith(compareBy<Event>({ eventDate(it)?.toEpochDay() }, { eventTime(it) ?: "" }))
         .take(limit)
 
 enum class Trend { UP, DOWN, FLAT }
