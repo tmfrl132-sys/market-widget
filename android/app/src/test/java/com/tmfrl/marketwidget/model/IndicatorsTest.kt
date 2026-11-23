@@ -34,7 +34,9 @@ class IndicatorsTest {
     }
 
     @Test fun availabilityByPeriod() {
-        assertTrue(supportsMomentum(Period.TODAY))
+        assertFalse(supportsMomentum(Period.TODAY))
+        assertFalse(supportsMomentum(Period.WEEK))
+        assertTrue(supportsMomentum(Period.FIVE_YEARS))
         assertFalse(supportsMomentum(Period.MAX))
         assertTrue(supportsVolatility(Period.FIVE_YEARS))
         assertFalse(supportsVolatility(Period.WEEK))
@@ -57,7 +59,7 @@ class IndicatorsTest {
         assertEquals(daily, indicatorSeries(q, Period.ONE_MONTH, shown))
         assertEquals(shown, indicatorSeries(q, Period.ONE_YEAR, shown).let { it!!.takeLast(shown.size) })
         assertNull(indicatorSeries(q, Period.MAX, shown))
-        assertEquals(listOf(1.0, 2.0), indicatorSeries(q, Period.TODAY, listOf(1.0, 2.0)))
+        assertNull(indicatorSeries(q, Period.TODAY, listOf(1.0, 2.0)))
         assertEquals(listOf(3, 4), tailOf(listOf(1, 2, 3, 4), 2))
     }
 

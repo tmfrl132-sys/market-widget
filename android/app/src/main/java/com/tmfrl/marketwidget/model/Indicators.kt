@@ -87,8 +87,11 @@ fun historicalVolatility(values: List<Double>, periodsPerYear: Int, period: Int 
     return out
 }
 
-/** 이 기간에 RSI·볼린저 밴드를 계산할 수 있는지. MAX는 점을 줄여 간격이 고르지 않아 뺀다. */
-fun supportsMomentum(period: Period): Boolean = period != Period.MAX
+/**
+ * 이 기간에 RSI·볼린저 밴드를 보이는지. 일봉·주봉 기간(1개월~5년)만이다(v1.7 사용자 결정).
+ * 오늘(5분봉)·7일(30분봉)은 잡음이 많아 빼고, MAX는 점을 줄여 간격이 고르지 않아 뺀다.
+ */
+fun supportsMomentum(period: Period): Boolean = supportsVolatility(period)
 
 /** 이 기간에 HV를 보이는지. 연율로 바꿀 봉 간격이 일정한 일봉·주봉 기간만이다. */
 fun supportsVolatility(period: Period): Boolean =
