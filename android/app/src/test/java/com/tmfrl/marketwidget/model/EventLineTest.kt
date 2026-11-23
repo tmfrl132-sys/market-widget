@@ -156,19 +156,19 @@ class EventLineTest {
     @Test fun lineText_splitsHighlightedPart() {
         val days = eventDays(listOf(us("2026-11-18", "미국 CPI"), us("2026-11-25", "미국 GDP")), today)
         assertEquals(
-            EventLineText("11/18(수) 미국 CPI 오늘", " · 11/25(수) 미국 GDP D-7"),
+            EventLineText("11/18(수) 미국 CPI ★★★ 오늘", " · 11/25(수) 미국 GDP ★ D-7"),
             eventLineText(days),
         )
     }
 
     @Test fun lineText_noLeadingSeparatorWithoutHighlight() {
         val days = eventDays(listOf(us("2026-11-25", "미국 GDP")), today)
-        assertEquals(EventLineText("", "11/25(수) 미국 GDP D-7"), eventLineText(days))
+        assertEquals(EventLineText("", "11/25(수) 미국 GDP ★ D-7"), eventLineText(days))
     }
 
     @Test fun lineText_onlyHighlightedPart() {
         val days = eventDays(listOf(us("2026-11-19", "미국 GDP")), today)
-        assertEquals(EventLineText("11/19(목) 미국 GDP 내일", ""), eventLineText(days))
+        assertEquals(EventLineText("11/19(목) 미국 GDP ★ 내일", ""), eventLineText(days))
     }
 
     @Test fun lineTap_opensAndCloses() {
