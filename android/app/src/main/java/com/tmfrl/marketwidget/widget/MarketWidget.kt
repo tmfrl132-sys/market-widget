@@ -43,6 +43,7 @@ import androidx.glance.layout.Column
 import androidx.glance.layout.ContentScale
 import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
+import androidx.glance.layout.fillMaxHeight
 import androidx.glance.layout.fillMaxSize
 import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.height
@@ -191,9 +192,9 @@ private const val MAX_CHART_PIXELS = 250_000
 /** 이 높이보다 낮으면 잠수 차트를 빼고 가격 차트(구간 칠과 고점·바닥 점)만 보여준다. */
 private val MIN_STACKED_HEIGHT = 140.dp
 
-/** 보조 표시 체크박스 줄 높이와 한 줄 개수(v1.7). */
-private val OPTION_ROW_HEIGHT = 22.dp
-private const val OPTIONS_PER_ROW = 4
+/** 보조 표시 체크박스(v1.7.1, 차트 오른쪽 세로 열). 한 칸 높이와 열 너비. */
+private val OPTION_ITEM_HEIGHT = 22.dp
+private val OPTION_COLUMN_WIDTH = 66.dp
 
 /** 이동평균선 범례 줄 높이. */
 private val LEGEND_HEIGHT = 14.dp
@@ -853,8 +854,8 @@ private fun ChartPanel(
     val maPeriods = movingAveragePeriods(period)
     val maLines = if (options.show_ma && trendAvailable && logChart == null) maPeriods.map { tail(movingAverage(indicatorBase, it)) } else null
     val volumeBars = if (options.show_volume) volumes else null
-    // 체크박스: 가격 차트에 겹치는 것(캔들·이평·볼린저·MDD) 다음 아래 칸(거래량·RSI·MACD·HV) 순서로 한 줄에 4개씩
-    val optionRows = listOfNotNull(
+    // 체크박스(v1.7.1): 차트 오른쪽에 세로로 놓는다. 가격 차트에 겹치는 것(캔들·이평·볼린저·MDD) 다음 아래 칸(거래량·RSI·MACD·HV) 순서다.
+    val optionItems = listOfNotNull(
         if (candlesAvailable) Triple(OPTION_CANDLES, "캔들", options.show_candles) else null,
         if (trendAvailable && logChart == null) Triple(OPTION_MA, "이평", options.show_ma) else null,
         if (momentumAvailable && logChart == null) Triple(OPTION_BOLLINGER, "볼린저", options.show_bollinger) else null,
@@ -863,13 +864,16 @@ private fun ChartPanel(
         if (momentumAvailable) Triple(OPTION_RSI, "RSI", options.show_rsi) else null,
         if (trendAvailable) Triple(OPTION_MACD, "MACD", options.show_macd) else null,
         if (volatilityAvailable) Triple(OPTION_HV, "HV", options.show_hv) else null,
-    ).chunked(OPTIONS_PER_ROW)
-    // 차트 그림 높이 = 칸 높이 - 위 두 줄(이름·최저최고) - 낙폭 줄 - 이평 범례 - 보조 표시 줄 - 아래 두 줄(기간 표시, 기간 선택)
+    )
+    // 차트 그림 높이 = 칸 높이 - 위 두 줄(이름·최저최고) - 낙폭 줄 - 이평 범례 - 아래 두 줄(기간 표시, 기간 선택)
     val imagesHeight = maxOf(
         40.dp,
-        height - (if (drawdown != null) 100.dp else 84.dp) - OPTION_ROW_HEIGHT * optionRows.size -
-            (if (maLines != null) LEGEND_HEIGHT else 0.dp),
+        height - (if (drawdown != null) 100.dp else 84.dp) - (if (maLines != null) LEGEND_HEIGHT else 0.dp),
     )
+    // 차트 높이에 들어가는 만큼 한 열에 넣고, 넘치면 열을 하나 더 둔다(좁은 위젯)
+    val perColumn = maxOf(1, ((imagesHeight + if (maLines != null) LEGEND_HEIGHT else 0.dp) / OPTION_ITEM_HEIGHT).toInt())
+    val optionColumns = optionItems.chunked(perColumn)
+    val chartWidth = width - OPTION_COLUMN_WIDTH * optionColumns.size
     // 아래 칸: 잠수 차트(MDD) → 거래량 → RSI → MACD → HV. 칸이 낮으면 모두 뺀다(낙폭은 가격 차트의 구간 칠과 점으로 남는다).
     val stackable = imagesHeight >= MIN_STACKED_HEIGHT
     val lowers = listOfNotNull(
@@ -889,7 +893,7 @@ private fun ChartPanel(
     }
     val lowerHeight = imagesHeight * lowerShare
     val priceHeight = imagesHeight - lowerHeight * lowers.size
-    val fullW = width.toPx(density).coerceAtLeast(1)
+    val fullW = chartWidth.toPx(density).coerceAtLeast(1)
     val priceH = priceHeight.toPx(density)
     val lowerH = lowerHeight.toPx(density)
     // 모든 그림을 합친 크기로 한 번만 줄인다. 같은 축척이라 폭(px), 글자 크기, 선 굵기가 같다.
@@ -1081,32 +1085,36 @@ private fun ChartPanel(
             )
         }
         Spacer(GlanceModifier.height(4.dp))
-        // 자식은 이평 범례, 가격 차트, 아래 칸 최대 5개로 7개 이하다
-        Column(modifier = GlanceModifier.fillMaxWidth().defaultWeight()) {
-            if (maLines != null) {
-                Row(modifier = GlanceModifier.fillMaxWidth().height(LEGEND_HEIGHT), verticalAlignment = Alignment.CenterVertically) {
-                    Text("이평", style = style(SUBTLE, 9), maxLines = 1)
-                    maPeriods.forEachIndexed { i, p ->
-                        Text("  ━$p", style = style(MA_COLORS[i % MA_COLORS.size], 9, bold = true), maxLines = 1)
+        // 그림 열 하나와 체크박스 열 최대 2개(v1.7.1)
+        Row(modifier = GlanceModifier.fillMaxWidth().defaultWeight()) {
+            // 자식은 이평 범례, 가격 차트, 아래 칸 최대 5개로 7개 이하다
+            Column(modifier = GlanceModifier.defaultWeight().fillMaxHeight()) {
+                if (maLines != null) {
+                    Row(modifier = GlanceModifier.fillMaxWidth().height(LEGEND_HEIGHT), verticalAlignment = Alignment.CenterVertically) {
+                        Text("이평", style = style(SUBTLE, 9), maxLines = 1)
+                        maPeriods.forEachIndexed { i, p ->
+                            Text("  ━$p", style = style(MA_COLORS[i % MA_COLORS.size], 9, bold = true), maxLines = 1)
+                        }
                     }
                 }
-            }
-            Image(
-                provider = ImageProvider(bitmap),
-                contentDescription = "${quote.name} ${period.label} 차트",
-                contentScale = ContentScale.FillBounds,
-                modifier = GlanceModifier.fillMaxWidth().defaultWeight().clickable(close),
-            )
-            lowerBitmaps.forEach { (lowerBitmap, label) ->
                 Image(
-                    provider = ImageProvider(lowerBitmap),
-                    contentDescription = "${quote.name} $label 차트",
+                    provider = ImageProvider(bitmap),
+                    contentDescription = "${quote.name} ${period.label} 차트",
                     contentScale = ContentScale.FillBounds,
-                    modifier = GlanceModifier.fillMaxWidth().height(lowerHeight).clickable(close),
+                    modifier = GlanceModifier.fillMaxWidth().defaultWeight().clickable(close),
                 )
+                lowerBitmaps.forEach { (lowerBitmap, label) ->
+                    Image(
+                        provider = ImageProvider(lowerBitmap),
+                        contentDescription = "${quote.name} $label 차트",
+                        contentScale = ContentScale.FillBounds,
+                        modifier = GlanceModifier.fillMaxWidth().height(lowerHeight).clickable(close),
+                    )
+                }
             }
+            optionColumns.forEach { OptionColumn(it) }
         }
-        // 자식은 기간 표시 줄, 보조 표시 줄 최대 2개, 기간 선택 줄로 4개 이하다
+        // 자식은 기간 표시 줄과 기간 선택 줄이다
         Column(modifier = GlanceModifier.fillMaxWidth()) {
             Row(modifier = GlanceModifier.fillMaxWidth().padding(top = 2.dp)) {
                 val startLabel = when {
@@ -1121,7 +1129,6 @@ private fun ChartPanel(
                 // 합친 차트의 현재는 차트 마지막 점이다(장외에는 선물 환산값이라 카드 숫자와 다르다)
                 Text("현재 ${formatPrice(combined?.price ?: quote.price)}", style = style(color, 10, bold = true))
             }
-            optionRows.forEach { OptionRow(it) }
             PeriodSelector(period, logScale, compareButton)
         }
     }
@@ -1132,15 +1139,13 @@ private fun breaksFor(combined: CombinedChart?, today: Boolean, quote: Quote, co
     combined?.breaks ?: if (today) timeGapBreaks(quote.intraday_times, count) else emptyList()
 
 /**
- * 보조 표시 체크박스 줄(v1.7). (설정 키, 글자, 켜짐) 목록이고 최대 5개다. 누르면 설정이 바뀌어 모든 위젯에 같이 적용된다.
+ * 보조 표시 체크박스 열(v1.7.1, 차트 오른쪽). (설정 키, 글자, 켜짐) 목록이고 최대 8개라 Glance 자식 한도(10개) 안이다.
+ * 누르면 설정이 바뀌어 모든 위젯에 같이 적용된다.
  */
 @Composable
-private fun OptionRow(items: List<Triple<String, String, Boolean>>) {
+private fun OptionColumn(items: List<Triple<String, String, Boolean>>) {
     val colors = CheckboxDefaults.colors(checkedColor = ColorProvider(DOWN), uncheckedColor = ColorProvider(SUBTLE))
-    Row(
-        modifier = GlanceModifier.fillMaxWidth().height(OPTION_ROW_HEIGHT),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    Column(modifier = GlanceModifier.width(OPTION_COLUMN_WIDTH).fillMaxHeight().padding(start = 4.dp)) {
         items.forEach { (key, label, on) ->
             CheckBox(
                 checked = on,
@@ -1149,7 +1154,7 @@ private fun OptionRow(items: List<Triple<String, String, Boolean>>) {
                 style = style(if (on) TEXT else SUBTLE, 11, bold = on),
                 colors = colors,
                 maxLines = 1,
-                modifier = GlanceModifier.defaultWeight(),
+                modifier = GlanceModifier.height(OPTION_ITEM_HEIGHT),
             )
         }
     }
