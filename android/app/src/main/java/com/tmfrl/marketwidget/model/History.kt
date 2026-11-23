@@ -43,7 +43,12 @@ data class YahooChartMeta(
 data class YahooIndicators(val quote: List<YahooBars> = emptyList())
 
 @Serializable
-data class YahooBars(val close: List<Double?> = emptyList())
+data class YahooBars(
+    val close: List<Double?> = emptyList(),
+    val open: List<Double?> = emptyList(),
+    val high: List<Double?> = emptyList(),
+    val low: List<Double?> = emptyList(),
+)
 
 private val json = Json { ignoreUnknownKeys = true }
 
@@ -220,4 +225,28 @@ fun bigMovePct(base: Double, closes: List<Double>): Double {
     val mid = moves.size / 2
     val median = if (moves.size % 2 == 0) (moves[mid - 1] + moves[mid]) / 2 else moves[mid]
     return round1(maxOf(base, BIG_MOVE_FACTOR * median))
+}
+
+/**
+ * 캔들용 시가·고가·저가(v1.7). 수집기 chart_ohlc와 같다: chartCloses와 같은 봉(null 종가 제외)과 1:1이고,
+ * 값이 없거나 목록 길이가 다르면 종가로 채우며, 고가·저가는 시가·종가를 감싸도록 넓힌다.
+ */
+fun chartOhlc(result: YahooChartResult): Triple<List<Double>, List<Double>, List<Double>> {
+    val bars = result.indicators.quote.firstOrNull() ?: return Triple(emptyList(), emptyList(), emptyList())
+    val closes = bars.close
+    fun column(values: List<Double?>) = if (values.size == closes.size) values else List(closes.size) { null }
+    val opens = column(bars.open)
+    val highs = column(bars.high)
+    val lows = column(bars.low)
+    val o = mutableListOf<Double>()
+    val h = mutableListOf<Double>()
+    val l = mutableListOf<Double>()
+    closes.forEachIndexed { i, close ->
+        if (close == null) return@forEachIndexed
+        val open = opens[i] ?: close
+        o += round2(open)
+        h += round2(maxOf(highs[i] ?: maxOf(close, open), close, open))
+        l += round2(minOf(lows[i] ?: minOf(close, open), close, open))
+    }
+    return Triple(o, h, l)
 }

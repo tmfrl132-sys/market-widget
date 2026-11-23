@@ -33,7 +33,29 @@ data class WidgetSettings(
     val custom: List<CustomTicker> = emptyList(),
     val show_drawdown: Boolean = true,
     val nxt_hours: Boolean = false,
+    // v1.7 차트 보조 표시. 위젯 차트 아래 체크박스로 켜고 끈다. 모든 위젯에 같이 쓰인다.
+    val show_candles: Boolean = false,
+    val show_rsi: Boolean = false,
+    val show_bollinger: Boolean = false,
+    val show_hv: Boolean = false,
 )
+
+/** 차트 보조 표시 체크박스 키(v1.7). 위젯 액션 인자로 쓴다. */
+const val OPTION_CANDLES = "candles"
+const val OPTION_DRAWDOWN = "drawdown"
+const val OPTION_BOLLINGER = "bollinger"
+const val OPTION_RSI = "rsi"
+const val OPTION_HV = "hv"
+
+/** 키에 맞는 보조 표시를 뒤집는다. 모르는 키는 그대로 둔다. */
+fun toggleChartOption(settings: WidgetSettings, key: String): WidgetSettings = when (key) {
+    OPTION_CANDLES -> settings.copy(show_candles = !settings.show_candles)
+    OPTION_DRAWDOWN -> settings.copy(show_drawdown = !settings.show_drawdown)
+    OPTION_BOLLINGER -> settings.copy(show_bollinger = !settings.show_bollinger)
+    OPTION_RSI -> settings.copy(show_rsi = !settings.show_rsi)
+    OPTION_HV -> settings.copy(show_hv = !settings.show_hv)
+    else -> settings
+}
 
 const val KIND_EQUITY = "EQUITY"
 const val KIND_ETF = "ETF"

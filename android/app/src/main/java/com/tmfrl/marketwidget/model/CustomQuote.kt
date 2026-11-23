@@ -58,7 +58,13 @@ fun customBigMoveBase(kind: String): Double = when (kind) {
 }
 
 /** 값과 날짜 목록(1년 일봉 또는 5년 주봉). */
-data class Series(val values: List<Double>, val dates: List<String>)
+data class Series(
+    val values: List<Double>,
+    val dates: List<String>,
+    val open: List<Double> = emptyList(),
+    val high: List<Double> = emptyList(),
+    val low: List<Double> = emptyList(),
+)
 
 /**
  * 추가 종목 Quote를 만든다. 받지 못한 부분(null)은 previous 값을 그대로 쓴다.
@@ -75,7 +81,12 @@ fun assembleCustomQuote(
     updatedAt: String,
 ): Quote {
     var quote = (previous ?: Quote(ticker.id, ticker.name, null, null, null)).copy(id = ticker.id, name = ticker.name)
-    if (daily != null) quote = quote.copy(daily = daily.values, daily_dates = daily.dates)
+    if (daily != null) {
+        quote = quote.copy(
+            daily = daily.values, daily_dates = daily.dates,
+            daily_open = daily.open, daily_high = daily.high, daily_low = daily.low,
+        )
+    }
     if (weekly != null) quote = quote.copy(weekly = weekly.values, weekly_dates = weekly.dates)
     if (max != null) {
         quote = quote.copy(

@@ -603,7 +603,11 @@ private fun withLatestHistory(quote: Quote, price: Double, prevClose: Double, up
     val depth = peak?.let { high -> drawdownPct(price, high) }
     val daily = withLatestDaily(quote.daily, basis)
     val episode = latestEpisode(quote, price, depth, updatedAt)
+    val (open, high, low) = latestOhlc(quote, daily, price)
     return quote.copy(
+        daily_open = open,
+        daily_high = high,
+        daily_low = low,
         chart = withLatestDaily(quote.chart, basis),
         daily = daily,
         daily_dates = withLatestDate(quote.daily_dates, quote.daily.size, daily.size, updatedAt),

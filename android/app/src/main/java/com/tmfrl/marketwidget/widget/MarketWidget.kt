@@ -104,6 +104,26 @@ import com.tmfrl.marketwidget.model.formatLegendChange
 import com.tmfrl.marketwidget.model.formatLegendValue
 import com.tmfrl.marketwidget.model.formatMarketState
 import com.tmfrl.marketwidget.model.YAxis
+import com.tmfrl.marketwidget.model.Candles
+import com.tmfrl.marketwidget.model.CombinedChart
+import com.tmfrl.marketwidget.model.HV_PERIOD
+import com.tmfrl.marketwidget.model.OPTION_BOLLINGER
+import com.tmfrl.marketwidget.model.OPTION_CANDLES
+import com.tmfrl.marketwidget.model.OPTION_DRAWDOWN
+import com.tmfrl.marketwidget.model.OPTION_HV
+import com.tmfrl.marketwidget.model.OPTION_RSI
+import com.tmfrl.marketwidget.model.RSI_PERIOD
+import com.tmfrl.marketwidget.model.bollinger
+import com.tmfrl.marketwidget.model.candlesFor
+import com.tmfrl.marketwidget.model.historicalVolatility
+import com.tmfrl.marketwidget.model.indicatorSeries
+import com.tmfrl.marketwidget.model.nullsAsNaN
+import com.tmfrl.marketwidget.model.periodsPerYear
+import com.tmfrl.marketwidget.model.rsi
+import com.tmfrl.marketwidget.model.supportsMomentum
+import com.tmfrl.marketwidget.model.supportsVolatility
+import com.tmfrl.marketwidget.model.tailOf
+import com.tmfrl.marketwidget.model.toggleChartOption
 import com.tmfrl.marketwidget.model.formatPowerOfTen
 import com.tmfrl.marketwidget.model.formatPrice
 import com.tmfrl.marketwidget.model.legendChangePct
@@ -161,6 +181,25 @@ private const val MAX_CHART_PIXELS = 250_000
 
 /** 이 높이보다 낮으면 잠수 차트를 빼고 가격 차트(구간 칠과 고점·바닥 점)만 보여준다. */
 private val MIN_STACKED_HEIGHT = 140.dp
+
+/** 보조 표시 체크박스 줄 높이(v1.7). */
+private val OPTION_ROW_HEIGHT = 22.dp
+
+private val OPTION_KEY = ActionParameters.Key<String>("option")
+
+/** RSI 칸 눈금(0~100)과 과매수·과매도 점선. */
+private val RSI_AXIS = YAxis(0.0, 100.0, listOf(0.0, 30.0, 70.0, 100.0))
+private val RSI_GUIDES = listOf(30.0, 70.0)
+
+/** 보조 지표 선 색. 빨강·파랑은 등락 뜻이라 보라·초록을 쓴다. */
+private val RSI_LINE = Color(0xFFA78BFA)
+private val HV_LINE = Color(0xFF34D399)
+private val BOLLINGER_LINE = Color(0xB3A78BFA)
+private val BOLLINGER_MID = Color(0x66A78BFA)
+
+private fun formatRsiAxis(value: Double): String = value.toInt().toString()
+
+private fun formatIndicator(value: Double): String = String.format(java.util.Locale.US, "%.1f", value)
 
 /** 차트 그림 높이 중 아래 잠수 차트가 차지하는 비율. 가격 차트를 우선한다. */
 private const val UNDERWATER_SHARE = 0.35f
@@ -288,7 +327,7 @@ class MarketWidget : GlanceAppWidget() {
             val selection = if (data == null) state.selection() else sanitizeSelection(state.selection(), data.quotes.map { it.id })
             WidgetContent(
                 data, ZonedDateTime.now(), selection, parsePeriod(state[PERIOD]),
-                state[LOG_SCALE] == true, state[AUTO] == true, settings.show_drawdown, state[EVENTS_OPEN] == true,
+                state[LOG_SCALE] == true, state[AUTO] == true, settings, state[EVENTS_OPEN] == true,
             )
         }
     }
@@ -303,10 +342,14 @@ class SelectPeriodAction : ActionCallback {
     }
 }
 
-/** 차트 머리줄의 MDD 체크박스(v1.6). 설정 화면의 "MDD 표시"와 같은 값이라 모든 위젯에 같이 적용된다. */
-class ToggleDrawdownAction : ActionCallback {
+/**
+ * 차트 아래 보조 표시 체크박스(v1.6 MDD, v1.7 캔들·볼린저·RSI·HV). 설정에 저장되어 모든 위젯에 같이 적용된다.
+ * MDD는 설정 화면의 "MDD 표시"와 같은 값이다.
+ */
+class ToggleOptionAction : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
-        SettingsStore.forContext(context).update { it.copy(show_drawdown = !it.show_drawdown) }
+        val key = parameters[OPTION_KEY] ?: return
+        SettingsStore.forContext(context).update { toggleChartOption(it, key) }
         redrawAllWidgets(context)
     }
 }
@@ -441,7 +484,7 @@ private fun Dp.toPx(density: Float) = (value * density).toInt()
 @Composable
 private fun WidgetContent(
     data: MarketData?, now: ZonedDateTime, selection: ChartSelection, period: Period, logScale: Boolean, auto: Boolean,
-    showDrawdown: Boolean, eventsOpen: Boolean,
+    options: WidgetSettings, eventsOpen: Boolean,
 ) {
     val size = LocalSize.current
     Column(
@@ -459,7 +502,7 @@ private fun WidgetContent(
                 modifier = GlanceModifier.clickable(actionRunCallback<RefreshAction>()),
             )
         } else {
-            QuotesAndDetail(data, now, selection, period, logScale, auto, showDrawdown, eventsOpen, size, GlanceModifier.defaultWeight())
+            QuotesAndDetail(data, now, selection, period, logScale, auto, options, eventsOpen, size, GlanceModifier.defaultWeight())
         }
     }
 }
@@ -467,7 +510,7 @@ private fun WidgetContent(
 @Composable
 private fun QuotesAndDetail(
     data: MarketData, now: ZonedDateTime, selection: ChartSelection, period: Period, logScale: Boolean, auto: Boolean,
-    showDrawdown: Boolean, eventsOpen: Boolean, size: DpSize, modifier: GlanceModifier,
+    options: WidgetSettings, eventsOpen: Boolean, size: DpSize, modifier: GlanceModifier,
 ) {
     // 한 줄 칸 수는 위젯 폭으로 정하고, 줄 수가 늘면 차트·일정 칸 위쪽 높이도 그만큼 늘린다
     val grid = tileGrid(size.width.value, data.quotes.size)
@@ -516,7 +559,7 @@ private fun QuotesAndDetail(
                 val other = if (auto) null else data.quotes.firstOrNull { it.id == selection.compare && it.id != chosen.id }
                 val state = asOf?.let { marketState(chosen, it) }
                 ChartPanel(
-                    chosen, other, !auto && selection.picking, state, period, logScale, auto, showDrawdown,
+                    chosen, other, !auto && selection.picking, state, period, logScale, auto, options,
                     size.width - 20.dp, detailHeight, GlanceModifier.defaultWeight(),
                 )
             } else if (chosen != null) {
@@ -711,7 +754,7 @@ private enum class CompareButton { OFF, PICKING, ON }
 @Composable
 private fun ChartPanel(
     quote: Quote, other: Quote?, picking: Boolean, state: MarketState?, period: Period, logScale: Boolean, auto: Boolean,
-    showDrawdown: Boolean, width: Dp, height: Dp, modifier: GlanceModifier,
+    options: WidgetSettings, width: Dp, height: Dp, modifier: GlanceModifier,
 ) {
     val series = other?.let { compareSeries(quote, it, period) }
     if (other != null && series != null) {
@@ -743,25 +786,59 @@ private fun ChartPanel(
     val density = LocalContext.current.resources.displayMetrics.density
     // 잠수 차트. 오늘, 낙폭 없는 지표(원/달러·달러인덱스·미 10년물·VIX), 점이 모자라면 null이다.
     // 설정에서 MDD 표시를 끄면 null로 두어 낙폭 줄, 잠수 차트, 최대 낙폭 구간 칠, 고점·바닥 점을 모두 그리지 않는다.
-    // MDD 체크박스는 이 지표·기간에 낙폭을 그릴 수 있을 때만 보인다(끈 상태에서도 다시 켤 수 있게 설정과 따로 계산한다)
+    // 보조 표시 체크박스(v1.7)는 이 지표·기간에 그릴 수 있을 때만 보인다. 끈 상태에서도 다시 켤 수 있게 설정과 따로 계산한다.
     val drawdownAvailable = drawdownChart(quote, period) != null
-    val drawdown = if (showDrawdown) drawdownChart(quote, period) else null
-    // 차트 그림 높이 = 칸 높이 - 위 두 줄(이름·최저최고) - 낙폭 줄 - 아래 두 줄(기간 표시, 기간 선택)
-    val imagesHeight = maxOf(40.dp, height - (if (drawdown != null) 100.dp else 84.dp))
-    val showUnderwater = drawdown != null && imagesHeight >= MIN_STACKED_HEIGHT
-    val underwaterHeight = if (showUnderwater) imagesHeight * UNDERWATER_SHARE else 0.dp
-    val priceHeight = imagesHeight - underwaterHeight
-    val fullW = width.toPx(density).coerceAtLeast(1)
-    val priceH = priceHeight.toPx(density)
-    val underwaterH = underwaterHeight.toPx(density)
-    // 두 그림을 합친 크기로 한 번만 줄인다. 같은 축척이라 폭(px), 글자 크기, 선 굵기가 같다.
-    val (bw, bhTotal) = fitBitmap(fullW, priceH + underwaterH, MAX_CHART_PIXELS)
-    val scale = bw.toFloat() / fullW
-    val priceBh = if (showUnderwater) (priceH * scale).toInt() else bhTotal
-    val underwaterBh = (underwaterH * scale).toInt()
-    val textPx = DETAIL_TEXT_SP * density * scale
+    val drawdown = if (options.show_drawdown) drawdownChart(quote, period) else null
+    val candlesAvailable = combined == null && candlesFor(quote, period) != null
+    val candles = if (options.show_candles && candlesAvailable) candlesFor(quote, period) else null
+    val momentumAvailable = supportsMomentum(period) && values.size > RSI_PERIOD
+    val volatilityAvailable = supportsVolatility(period) && values.size > HV_PERIOD
+    // 지표는 더 긴 계열(1·3개월은 1년 일봉)로 계산하고 끝을 차트 점 수에 맞춘다
+    val indicatorBase = indicatorSeries(quote, period, values) ?: values
+    val rsiValues = if (options.show_rsi && momentumAvailable) nullsAsNaN(tailOf(rsi(indicatorBase), values.size)) else null
+    val hvValues = if (options.show_hv && volatilityAvailable) {
+        nullsAsNaN(tailOf(historicalVolatility(indicatorBase, periodsPerYear(quote, period)), values.size))
+    } else {
+        null
+    }
     // 로그는 첫 값 대비 배수의 지수로 그린다. 점선 문구에는 실제 값을 그대로 쓴다.
     val logChart = if (logScale && period.supportsLog) logChartFor(values) else null
+    // 볼린저 밴드는 실제 가격 눈금에만 겹친다(로그 눈금에서는 숨긴다)
+    val bands = if (options.show_bollinger && momentumAvailable && logChart == null) {
+        bollinger(indicatorBase).let { b -> listOf(b.upper, b.middle, b.lower).map { nullsAsNaN(tailOf(it, values.size)) } }
+    } else {
+        null
+    }
+    val showOptionRow = drawdownAvailable || candlesAvailable || momentumAvailable
+    // 차트 그림 높이 = 칸 높이 - 위 두 줄(이름·최저최고) - 낙폭 줄 - 보조 표시 줄 - 아래 두 줄(기간 표시, 기간 선택)
+    val imagesHeight = maxOf(
+        40.dp,
+        height - (if (drawdown != null) 100.dp else 84.dp) - (if (showOptionRow) OPTION_ROW_HEIGHT else 0.dp),
+    )
+    // 아래 칸: 잠수 차트(MDD), RSI, HV 순서. 칸이 낮으면 모두 뺀다(낙폭은 가격 차트의 구간 칠과 점으로 남는다).
+    val stackable = imagesHeight >= MIN_STACKED_HEIGHT
+    val showUnderwater = drawdown != null && stackable
+    val showRsi = rsiValues != null && stackable
+    val showHv = hvValues != null && stackable
+    val lowerCount = listOf(showUnderwater, showRsi, showHv).count { it }
+    val lowerShare = when (lowerCount) {
+        0 -> 0f
+        1 -> UNDERWATER_SHARE
+        2 -> 0.24f
+        else -> 0.18f
+    }
+    val lowerHeight = imagesHeight * lowerShare
+    val priceHeight = imagesHeight - lowerHeight * lowerCount
+    val underwaterHeight = lowerHeight
+    val fullW = width.toPx(density).coerceAtLeast(1)
+    val priceH = priceHeight.toPx(density)
+    val lowerH = lowerHeight.toPx(density)
+    // 모든 그림을 합친 크기로 한 번만 줄인다. 같은 축척이라 폭(px), 글자 크기, 선 굵기가 같다.
+    val (bw, bhTotal) = fitBitmap(fullW, priceH + lowerH * lowerCount, MAX_CHART_PIXELS)
+    val scale = bw.toFloat() / fullW
+    val priceBh = if (lowerCount > 0) (priceH * scale).toInt() else bhTotal
+    val underwaterBh = (lowerH * scale).toInt()
+    val textPx = DETAIL_TEXT_SP * density * scale
     val axisLabel: (Double) -> String = if (logChart != null) ::formatPowerOfTen else ::formatPrice
     val priceValues = logChart?.values ?: values
     // 합친 차트의 가로 점선은 등락 기준(마감 뒤엔 종가)이 아니라 가장 최근 정규장의 전일종가다. 없으면(옛 캐시) 기준선.
@@ -774,13 +851,21 @@ private fun ChartPanel(
         today -> "전일 ${formatPrice(baseline)}"
         else -> "시작 ${formatPrice(baseline)}"
     }
-    // renderLine이 스스로 정하는 축과 같다(값 + 기준값). 숫자 칸 폭을 미리 재려고 먼저 구한다.
-    val priceAxis = logChart?.axis ?: yAxisFor(priceValues + priceBaseline)
+    // renderLine이 스스로 정하는 축과 같다(값 + 기준값 + 캔들 고가·저가 + 밴드). 숫자 칸 폭을 미리 재려고 먼저 구한다.
+    val priceAxis = logChart?.axis ?: yAxisFor(
+        (priceValues + priceBaseline + candles?.let { it.high + it.low }.orEmpty() + bands?.flatten().orEmpty()).filterNot { it.isNaN() },
+    )
     val underwaterAxis = if (showUnderwater) drawdown?.let { yAxisFor(it.depths + 0.0) } else null
-    // 두 축의 숫자 칸 중 넓은 것 하나를 위아래가 함께 써서 그림 영역 폭이 같다. 같은 인덱스가 같은 가로 위치다.
-    val gutter = if (underwaterAxis != null && priceAxis != null) {
+    val hvAxis = if (showHv) hvValues?.filterNot { it.isNaN() }?.let { yAxisFor(it + 0.0) } else null
+    // 모든 칸의 숫자 칸 중 넓은 것 하나를 함께 써서 그림 영역 폭이 같다. 같은 인덱스가 같은 가로 위치다.
+    val gutter = if (lowerCount > 0 && priceAxis != null) {
         commonGutter(
-            listOf(axisLabelWidth(priceAxis, axisLabel, textPx), axisLabelWidth(underwaterAxis, ::formatAxisPct, textPx)),
+            listOfNotNull(
+                axisLabelWidth(priceAxis, axisLabel, textPx),
+                underwaterAxis?.let { axisLabelWidth(it, ::formatAxisPct, textPx) },
+                if (showRsi) axisLabelWidth(RSI_AXIS, ::formatRsiAxis, textPx) else null,
+                hvAxis?.let { axisLabelWidth(it, ::formatAxisPct, textPx) },
+            ),
             textPx,
         )
     } else {
@@ -799,12 +884,14 @@ private fun ChartPanel(
         axisLabel, null, priceAxis,
         xTicks = xAxis.ticks,
         xPositions = xAxis.positions,
-        showXLabels = !showUnderwater,
+        showXLabels = lowerCount == 0,
         gutterPx = gutter,
         shade = shade,
         dots = dots,
+        candles = candles,
+        overlays = bands?.mapIndexed { i, band -> band to (if (i == 1) BOLLINGER_MID else BOLLINGER_LINE).toArgb() }.orEmpty(),
         // 고정 24시간 창(v1.6)의 정비 시간·주말은 선을 끊는다
-        breaks = combined?.breaks ?: if (today) timeGapBreaks(quote.intraday_times, values.size) else emptyList(),
+        breaks = breaksFor(combined, today, quote, values.size),
         bands = combined?.let(::combinedBands).orEmpty(),
         // 장마감 지점: 세로 점선 대신 선 위 점과 "장마감 7,417"(v1.3). 창 밖이면 없다.
         marks = listOfNotNull(combined?.let(::combinedCloseMark)),
@@ -838,17 +925,6 @@ private fun ChartPanel(
             // 합친 차트의 마지막 점이 선물 환산값이면 그 봉 시각을 작게 알린다
             combined?.let(::convertedLabel)?.let { Text("  $it", style = style(SUBTLE, 9), maxLines = 1) }
             Spacer(GlanceModifier.defaultWeight())
-            if (drawdownAvailable) {
-                CheckBox(
-                    checked = showDrawdown,
-                    onCheckedChange = actionRunCallback<ToggleDrawdownAction>(),
-                    text = "MDD",
-                    style = style(if (showDrawdown) TEXT else SUBTLE, 11, bold = showDrawdown),
-                    colors = CheckboxDefaults.colors(checkedColor = ColorProvider(DOWN), uncheckedColor = ColorProvider(SUBTLE)),
-                    maxLines = 1,
-                )
-                Spacer(GlanceModifier.width(6.dp))
-            }
             Box(modifier = GlanceModifier.background(tint).cornerRadius(6.dp).padding(horizontal = 6.dp, vertical = 2.dp)) {
                 Text(
                     (if (afterClose != null) "마감 후 " else "") + "${formatChangeBadge(changePct)} (${formatSignedAmount(change)})",
@@ -889,6 +965,8 @@ private fun ChartPanel(
                 marks = drawdown.marks,
                 xTicks = xAxis.ticks,
                 xPositions = xAxis.positions,
+                // 가로축 글자는 맨 아래 칸에만 둔다
+                showXLabels = !showRsi && !showHv,
                 gutterPx = gutter,
                 areaGradient = false,
                 shade = shade,
@@ -898,6 +976,49 @@ private fun ChartPanel(
                 contentDescription = "${quote.name} 고점 대비 낙폭 차트",
                 contentScale = ContentScale.FillBounds,
                 modifier = GlanceModifier.fillMaxWidth().height(underwaterHeight).clickable(close),
+            )
+        }
+        if (showRsi && rsiValues != null) {
+            // RSI(14): 0~100 고정 눈금, 70·30 점선. 끝 값을 "RSI 63.2"로 적는다.
+            val last = rsiValues.indexOfLast { !it.isNaN() }
+            val rsiBitmap = detailBitmap(
+                rsiValues, RSI_LINE, bw, underwaterBh, scale, density,
+                null, "", ::formatRsiAxis, null, RSI_AXIS,
+                marks = if (last >= 0) listOf(last to "RSI ${formatIndicator(rsiValues[last])}") else emptyList(),
+                xTicks = xAxis.ticks,
+                xPositions = xAxis.positions,
+                showXLabels = !showHv,
+                gutterPx = gutter,
+                areaGradient = false,
+                breaks = breaksFor(combined, today, quote, values.size),
+                guides = RSI_GUIDES,
+                fillArea = false,
+            )
+            Image(
+                provider = ImageProvider(rsiBitmap),
+                contentDescription = "${quote.name} RSI 차트",
+                contentScale = ContentScale.FillBounds,
+                modifier = GlanceModifier.fillMaxWidth().height(lowerHeight).clickable(close),
+            )
+        }
+        if (showHv && hvValues != null) {
+            // 역사적 변동성(20, 연율 %). 끝 값을 "HV 18.4%"로 적는다.
+            val last = hvValues.indexOfLast { !it.isNaN() }
+            val hvBitmap = detailBitmap(
+                hvValues, HV_LINE, bw, underwaterBh, scale, density,
+                null, "", ::formatAxisPct, 0.0, hvAxis,
+                marks = if (last >= 0) listOf(last to "HV ${formatIndicator(hvValues[last])}%") else emptyList(),
+                xTicks = xAxis.ticks,
+                xPositions = xAxis.positions,
+                gutterPx = gutter,
+                areaGradient = false,
+                fillArea = false,
+            )
+            Image(
+                provider = ImageProvider(hvBitmap),
+                contentDescription = "${quote.name} 역사적 변동성 차트",
+                contentScale = ContentScale.FillBounds,
+                modifier = GlanceModifier.fillMaxWidth().height(lowerHeight).clickable(close),
             )
         }
         Row(modifier = GlanceModifier.fillMaxWidth().padding(top = 2.dp)) {
@@ -913,7 +1034,46 @@ private fun ChartPanel(
             // 합친 차트의 현재는 차트 마지막 점이다(장외에는 선물 환산값이라 카드 숫자와 다르다)
             Text("현재 ${formatPrice(combined?.price ?: quote.price)}", style = style(color, 10, bold = true))
         }
+        if (showOptionRow) {
+            OptionRow(
+                listOfNotNull(
+                    if (candlesAvailable) Triple(OPTION_CANDLES, "캔들", options.show_candles) else null,
+                    if (drawdownAvailable) Triple(OPTION_DRAWDOWN, "MDD", options.show_drawdown) else null,
+                    if (momentumAvailable && logChart == null) Triple(OPTION_BOLLINGER, "볼린저", options.show_bollinger) else null,
+                    if (momentumAvailable) Triple(OPTION_RSI, "RSI", options.show_rsi) else null,
+                    if (volatilityAvailable) Triple(OPTION_HV, "HV", options.show_hv) else null,
+                ),
+            )
+        }
         PeriodSelector(period, logScale, compareButton)
+    }
+}
+
+/** 오늘 차트의 선 끊김. 합친 차트는 그 차트의 것, 고정 24시간 창은 봉 시각 간격으로 정한다. */
+private fun breaksFor(combined: CombinedChart?, today: Boolean, quote: Quote, count: Int): List<Int> =
+    combined?.breaks ?: if (today) timeGapBreaks(quote.intraday_times, count) else emptyList()
+
+/**
+ * 보조 표시 체크박스 줄(v1.7). (설정 키, 글자, 켜짐) 목록이고 최대 5개다. 누르면 설정이 바뀌어 모든 위젯에 같이 적용된다.
+ */
+@Composable
+private fun OptionRow(items: List<Triple<String, String, Boolean>>) {
+    val colors = CheckboxDefaults.colors(checkedColor = ColorProvider(DOWN), uncheckedColor = ColorProvider(SUBTLE))
+    Row(
+        modifier = GlanceModifier.fillMaxWidth().height(OPTION_ROW_HEIGHT),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        items.forEach { (key, label, on) ->
+            CheckBox(
+                checked = on,
+                onCheckedChange = actionRunCallback<ToggleOptionAction>(actionParametersOf(OPTION_KEY to key)),
+                text = label,
+                style = style(if (on) TEXT else SUBTLE, 11, bold = on),
+                colors = colors,
+                maxLines = 1,
+                modifier = GlanceModifier.defaultWeight(),
+            )
+        }
     }
 }
 
@@ -996,8 +1156,18 @@ private fun detailBitmap(
     dots: List<Pair<Int, Int>> = emptyList(),
     breaks: List<Int> = emptyList(),
     bands: List<ClosedFloatingPointRange<Float>> = emptyList(),
+    candles: Candles? = null,
+    overlays: List<Pair<List<Double>, Int>> = emptyList(),
+    guides: List<Double> = emptyList(),
+    fillArea: Boolean = true,
 ): Bitmap {
     return renderLine(
+        candles = candles,
+        upColor = UP.toArgb(),
+        downColor = DOWN.toArgb(),
+        overlays = overlays,
+        guides = guides,
+        fillArea = fillArea,
         values = values,
         lineColor = color.toArgb(),
         backgroundColor = BACKGROUND.toArgb(),

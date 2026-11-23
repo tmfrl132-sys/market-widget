@@ -58,6 +58,30 @@ def chart_closes(payload: dict) -> list[float]:
     return [round(c, 2) for c in closes if c is not None]
 
 
+def chart_ohlc(payload: dict) -> dict:
+    """캔들 차트용 일봉 시가·고가·저가(v1.7). chart_closes와 같은 봉(null 종가 제외)과 1:1이고 소수 둘째 자리다.
+    값이 없거나 목록 길이가 다르면 그 봉은 종가로 채운다. 고가·저가는 시가·종가를 감싸도록 넓힌다."""
+    bars = payload["chart"]["result"][0]["indicators"]["quote"][0]
+    closes = bars["close"]
+
+    def column(key: str) -> list:
+        values = bars.get(key) or []
+        return values if len(values) == len(closes) else [None] * len(closes)
+
+    opens, highs, lows = column("open"), column("high"), column("low")
+    out = {"daily_open": [], "daily_high": [], "daily_low": []}
+    for c, o, h, l in zip(closes, opens, highs, lows):
+        if c is None:
+            continue
+        o = c if o is None else o
+        h = max(c, o) if h is None else max(h, c, o)
+        l = min(c, o) if l is None else min(l, c, o)
+        out["daily_open"].append(round(o, 2))
+        out["daily_high"].append(round(h, 2))
+        out["daily_low"].append(round(l, 2))
+    return out
+
+
 def chart_dates(payload: dict) -> list[str]:
     """chart_closes와 같은 봉의 시장 현지 날짜(YYYY-MM-DD). null 종가 봉은 날짜도 뺀다."""
     result = payload["chart"]["result"][0]
@@ -300,6 +324,7 @@ def fetch_quotes(prev: dict[str, dict], get=requests.get) -> list[dict]:
                 "chart": daily[-OLD_APP_CHART_POINTS:],
                 "daily": daily,
                 "daily_dates": chart_dates(payload),
+                **chart_ohlc(payload),
                 **_fetch_weekly(symbol, get, prev.get(id_, {})),
                 **_fetch_max(id_, symbol, get, prev.get(id_, {})),
                 "big_move_pct": big_move_pct(id_, daily),

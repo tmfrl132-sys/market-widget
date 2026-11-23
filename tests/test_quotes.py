@@ -798,3 +798,20 @@ def test_stale_from_old_cache_without_new_fields_gets_empty_defaults():
     assert ks11["stale"] is True
     assert ks11["max_depths"] == []
     assert ks11["mdd_peak_date"] is ks11["mdd_trough_date"] is ks11["mdd_recovery_date"] is None
+
+
+def test_chart_ohlc_aligns_with_closes_and_fills_missing():
+    payload = {"chart": {"result": [{"meta": {}, "timestamp": [1, 2, 3, 4],
+        "indicators": {"quote": [{"close": [10.0, None, 12.0, 13.0], "open": [9.0, 1.0, None, 13.5],
+                                  "high": [11.0, 1.0, 12.5, None], "low": [8.5, 1.0, None, 12.0]}]}}]}}
+    ohlc = quotes.chart_ohlc(payload)
+    assert ohlc["daily_open"] == [9.0, 12.0, 13.5]
+    assert ohlc["daily_high"] == [11.0, 12.5, 13.5]
+    assert ohlc["daily_low"] == [8.5, 12.0, 12.0]
+    assert len(ohlc["daily_open"]) == len(quotes.chart_closes(payload))
+
+
+def test_chart_ohlc_without_columns_uses_close():
+    payload = {"chart": {"result": [{"meta": {}, "timestamp": [1, 2],
+        "indicators": {"quote": [{"close": [10.0, 11.0]}]}}]}}
+    assert quotes.chart_ohlc(payload) == {"daily_open": [10.0, 11.0], "daily_high": [10.0, 11.0], "daily_low": [10.0, 11.0]}

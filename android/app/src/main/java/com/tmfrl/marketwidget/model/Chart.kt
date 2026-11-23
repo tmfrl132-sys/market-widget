@@ -91,6 +91,29 @@ fun lineSegments(size: Int, breaks: List<Int>): List<IntRange> {
     return (listOf(0) + cuts).zip(cuts + size) { from, to -> from until to }
 }
 
+/**
+ * 구간에서 값이 없는 점(NaN)을 빼고 남은 연속 구간으로 나눈다(v1.7, 지표 앞쪽의 계산 전 점).
+ * 점이 1개뿐인 구간도 남긴다(끝 점 표시용). 값이 모두 있으면 segments 그대로다.
+ */
+fun splitAtMissing(segments: List<IntRange>, values: List<Double>): List<IntRange> =
+    segments.flatMap { range ->
+        val out = mutableListOf<IntRange>()
+        var start = -1
+        for (i in range) {
+            val ok = i in values.indices && !values[i].isNaN()
+            if (ok && start < 0) start = i
+            if (!ok && start >= 0) {
+                out += start until i
+                start = -1
+            }
+        }
+        if (start >= 0) out += start..range.last
+        out
+    }
+
+/** null을 NaN으로 바꾼다. 그림은 NaN 점을 건너뛴다. */
+fun nullsAsNaN(values: List<Double?>): List<Double> = values.map { it ?: Double.NaN }
+
 data class ChartSummary(val min: Double, val max: Double, val change: Double, val changePct: Double)
 
 /** 차트 기간의 최저·최고와 처음 대비 마지막 차이·등락률. */

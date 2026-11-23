@@ -34,6 +34,9 @@ data class Quote(
     val intraday: List<Double> = emptyList(), // 오늘 5분봉 종가. 기기가 직접 받는다
     val prev_close: Double? = null, // 전일 종가. 기기가 직접 받는다
     val daily_dates: List<String> = emptyList(), // daily와 1:1, YYYY-MM-DD
+    val daily_open: List<Double> = emptyList(), // daily와 1:1 시가(v1.7, 캔들). 옛 data.json에는 없다
+    val daily_high: List<Double> = emptyList(), // daily와 1:1 고가
+    val daily_low: List<Double> = emptyList(), // daily와 1:1 저가
     val weekly_dates: List<String> = emptyList(), // weekly와 1:1, YYYY-MM-DD
     val max_dates: List<String> = emptyList(), // max_closes와 1:1, YYYY-MM-DD
     val intraday_times: List<Long> = emptyList(), // intraday와 1:1, 초 단위 epoch. 기기가 직접 받는다

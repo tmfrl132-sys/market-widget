@@ -7,6 +7,7 @@ import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Shader
+import com.tmfrl.marketwidget.model.Candles
 import com.tmfrl.marketwidget.model.LabelBox
 import com.tmfrl.marketwidget.model.XTick
 import com.tmfrl.marketwidget.model.YAxis
@@ -14,6 +15,7 @@ import com.tmfrl.marketwidget.model.chartPoints
 import com.tmfrl.marketwidget.model.formatPrice
 import com.tmfrl.marketwidget.model.lineSegments
 import com.tmfrl.marketwidget.model.placeXLabels
+import com.tmfrl.marketwidget.model.splitAtMissing
 import com.tmfrl.marketwidget.model.stackLabels
 import com.tmfrl.marketwidget.model.yAxisFor
 import com.tmfrl.marketwidget.model.yPosition
@@ -38,6 +40,9 @@ import com.tmfrl.marketwidget.model.yPosition
  * breaks는 선과 영역을 끊을 점 위치(그 점 앞에서 끊는다, 합친 24시간 차트의 정비 시간·주말)다. 비면 지금처럼 한 선이다.
  * bands는 그림 영역 높이로 옅게 칠할 가로 구간(0~1, 정규장)이고 bandColor로 칠한다. detailed일 때만 쓰고 가장 먼저 그린다.
  * 합친 24시간 차트의 장마감 지점은 v1.3부터 세로 점선 대신 marks(점과 "장마감 7,417")로 그린다.
+ * v1.7: values의 NaN 점은 그리지 않는다(지표 앞쪽). candles가 있으면 선·영역 대신 일봉 캔들을 그린다(종가는 values,
+ * 상승 upColor·하락 downColor). overlays는 겹쳐 그릴 가는 선(볼린저 밴드, NaN 점은 건너뜀)이고 세로축 범위에 들어간다.
+ * guides는 문구 없는 가로 점선 값(RSI 70·30)이다.
  */
 fun renderLine(
     values: List<Double>,
@@ -68,6 +73,12 @@ fun renderLine(
     breaks: List<Int> = emptyList(),
     bands: List<ClosedFloatingPointRange<Float>> = emptyList(),
     bandColor: Int = 0,
+    candles: Candles? = null,
+    upColor: Int = 0,
+    downColor: Int = 0,
+    overlays: List<Pair<List<Double>, Int>> = emptyList(),
+    guides: List<Double> = emptyList(),
+    fillArea: Boolean = true,
 ): Bitmap {
     val w = widthPx.coerceAtLeast(2)
     val h = heightPx.coerceAtLeast(2)
@@ -77,7 +88,10 @@ fun renderLine(
 
     // 점선과 영역 기준값도 눈금 범위 안에 들어와야 한다
     val second = if (detailed) secondValues else null
-    val axis = if (detailed) fixedAxis ?: yAxisFor(values + second.orEmpty() + listOfNotNull(baseline, areaBase)) else null
+    val candle = if (detailed) candles?.takeIf { it.open.size == values.size && it.high.size == values.size && it.low.size == values.size } else null
+    val extras = (if (detailed) overlays.flatMap { it.first } else emptyList()) + candle?.let { it.high + it.low }.orEmpty()
+    val finite = (values + second.orEmpty() + extras + listOfNotNull(baseline, areaBase)).filterNot { it.isNaN() }
+    val axis = if (detailed) fixedAxis ?: yAxisFor(finite) else null
     val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = textColor
         textSize = textPx
@@ -93,8 +107,11 @@ fun renderLine(
     // 점과 위아래 끝 눈금 숫자가 잘리지 않게 여백을 둔다
     val pad = if (detailed) maxOf(strokePx * 3, textPx * 0.6f) else strokePx
     // 가로 위치는 작은 차트도 따른다. 타일도 장 시작~끝 중 지금까지만 그린다.
-    val points = chartPoints(values, plotW, plotH, pad, axis, xPositions)
+    // NaN 점은 자리만 잡고(가로 위치를 다른 칸과 맞추려고) 그리지 않는다
+    val fill = finite.minOrNull() ?: return bitmap
+    val points = chartPoints(values.map { if (it.isNaN()) fill else it }, plotW, plotH, pad, axis, xPositions)
     if (points.isEmpty()) return bitmap
+    val lastDrawn = values.indexOfLast { !it.isNaN() }.takeIf { it >= 0 } ?: return bitmap
 
     // 정규장 띠도 구간 칠처럼 가장 아래에 깐다. 가로 위치는 chartPoints와 같은 식이다.
     if (detailed && bands.isNotEmpty()) {
@@ -118,10 +135,10 @@ fun renderLine(
         xLabels.forEach { canvas.drawLine(it.x, 0f, it.x, plotH, grid) }
     }
 
-    val segments = lineSegments(points.size, breaks)
+    val segments = splitAtMissing(lineSegments(points.size, breaks), values)
     val line = linePath(points, segments)
     val secondPoints = second?.let { chartPoints(it, plotW, plotH, pad, axis, xPositions) }.orEmpty()
-    if (detailed && second == null) {
+    if (detailed && second == null && candle == null && fillArea) {
         val floor = if (axis != null && areaBase != null) {
             yPosition(areaBase, axis.min, axis.max, plotH, pad)
         } else {
@@ -149,14 +166,27 @@ fun renderLine(
         })
     }
     if (axis != null && baseline != null) drawBaseline(canvas, baseline, axis, text, plotW, plotH, pad, strokePx)
+    if (axis != null) guides.forEach { drawBaseline(canvas, it, axis, text, plotW, plotH, pad, strokePx) }
+    // 볼린저 밴드 같은 겹친 선은 주 선 아래에 가늘게 그린다
+    if (axis != null) {
+        overlays.filter { it.first.size == values.size }.forEach { (overlay, color) ->
+            val overlayPoints = chartPoints(overlay.map { if (it.isNaN()) fill else it }, plotW, plotH, pad, axis, xPositions)
+            val overlaySegments = splitAtMissing(lineSegments(overlay.size, breaks), overlay).filter { it.first < it.last }
+            canvas.drawPath(linePath(overlayPoints, overlaySegments), strokePaint(color, (strokePx * 0.5f).coerceAtLeast(1f)))
+        }
+    }
     if (secondPoints.isNotEmpty()) canvas.drawPath(linePath(secondPoints), strokePaint(secondColor, strokePx))
-    canvas.drawPath(line, strokePaint(lineColor, strokePx))
+    if (candle != null && axis != null) {
+        drawCandles(canvas, candle, values, points, axis, plotW, plotH, pad, strokePx, upColor, downColor)
+    } else {
+        canvas.drawPath(line, strokePaint(lineColor, strokePx))
+    }
     if (detailed) {
         dots.filter { (i, _) -> i in points.indices }.forEach { (i, color) -> drawDot(canvas, points[i], color, backgroundColor, strokePx) }
         if (secondPoints.isNotEmpty()) drawEndDot(canvas, secondPoints.last(), secondColor, backgroundColor, strokePx)
-        drawEndDot(canvas, points.last(), lineColor, backgroundColor, strokePx)
+        if (candle == null) drawEndDot(canvas, points[lastDrawn], lineColor, backgroundColor, strokePx)
         if (axis != null && baseline != null && baselineLabel.isNotEmpty()) {
-            drawBaselineLabel(canvas, baselineLabel, baseline, values.last(), axis, text, backgroundColor, plotW, plotH, pad)
+            drawBaselineLabel(canvas, baselineLabel, baseline, values[lastDrawn], axis, text, backgroundColor, plotW, plotH, pad)
         }
         drawMarks(canvas, marks.filter { (i, _) -> i in points.indices }, points, text, backgroundColor, plotW, strokePx)
         if (showXLabels) {
@@ -165,6 +195,33 @@ fun renderLine(
         }
     }
     return bitmap
+}
+
+/**
+ * 일봉 캔들. 심지는 고가~저가, 몸통은 시가~종가이고 종가가 시가 이상이면 상승색이다(한국식 빨강).
+ * 몸통 폭은 점 간격의 60%(최소 1px), 몸통 높이는 최소 1px이다.
+ */
+private fun drawCandles(
+    canvas: Canvas, candles: Candles, closes: List<Double>, points: List<Pair<Float, Float>>, axis: YAxis,
+    plotW: Float, plotH: Float, pad: Float, strokePx: Float, upColor: Int, downColor: Int,
+) {
+    val step = if (points.size > 1) (plotW - 2 * pad) / (points.size - 1) else plotW
+    val half = (step * 0.3f).coerceAtLeast(0.5f)
+    val wick = (strokePx * 0.4f).coerceIn(1f, half * 2)
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    closes.indices.forEach { i ->
+        val close = closes[i]
+        if (close.isNaN()) return@forEach
+        val open = candles.open[i]
+        val x = points[i].first
+        val y = { v: Double -> yPosition(v, axis.min, axis.max, plotH, pad) }
+        paint.color = if (close >= open) upColor else downColor
+        paint.strokeWidth = wick
+        canvas.drawLine(x, y(candles.high[i]), x, y(candles.low[i]), paint)
+        val top = minOf(y(open), y(close))
+        val bottom = maxOf(y(open), y(close)).coerceAtLeast(top + 1f)
+        canvas.drawRect(x - half, top, x + half, bottom, paint)
+    }
 }
 
 /** 구간마다 moveTo로 새로 시작한다. segments를 주지 않으면 모든 점을 한 선으로 잇는다. */
