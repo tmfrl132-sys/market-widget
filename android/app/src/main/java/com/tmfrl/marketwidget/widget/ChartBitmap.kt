@@ -43,6 +43,8 @@ import com.tmfrl.marketwidget.model.yPosition
  * v1.7: values의 NaN 점은 그리지 않는다(지표 앞쪽). candles가 있으면 선·영역 대신 일봉 캔들을 그린다(종가는 values,
  * 상승 upColor·하락 downColor). overlays는 겹쳐 그릴 가는 선(볼린저 밴드, NaN 점은 건너뜀)이고 세로축 범위에 들어간다.
  * guides는 문구 없는 가로 점선 값(RSI 70·30)이다.
+ * histogram은 0에서 위아래로 세우는 막대(MACD 히스토그램, 거래량)이고 histogramColors(막대마다)로 칠한다. 세로축에 0과 함께 들어간다.
+ * hideLine이면 선·영역·끝 점을 그리지 않는다(거래량 막대만).
  */
 fun renderLine(
     values: List<Double>,
@@ -79,6 +81,9 @@ fun renderLine(
     overlays: List<Pair<List<Double>, Int>> = emptyList(),
     guides: List<Double> = emptyList(),
     fillArea: Boolean = true,
+    histogram: List<Double>? = null,
+    histogramColors: List<Int> = emptyList(),
+    hideLine: Boolean = false,
 ): Bitmap {
     val w = widthPx.coerceAtLeast(2)
     val h = heightPx.coerceAtLeast(2)
@@ -89,7 +94,9 @@ fun renderLine(
     // 점선과 영역 기준값도 눈금 범위 안에 들어와야 한다
     val second = if (detailed) secondValues else null
     val candle = if (detailed) candles?.takeIf { it.open.size == values.size && it.high.size == values.size && it.low.size == values.size } else null
-    val extras = (if (detailed) overlays.flatMap { it.first } else emptyList()) + candle?.let { it.high + it.low }.orEmpty()
+    val bars = if (detailed) histogram?.takeIf { it.size == values.size } else null
+    val extras = (if (detailed) overlays.flatMap { it.first } else emptyList()) + candle?.let { it.high + it.low }.orEmpty() +
+        bars?.let { it + 0.0 }.orEmpty()
     val finite = (values + second.orEmpty() + extras + listOfNotNull(baseline, areaBase)).filterNot { it.isNaN() }
     val axis = if (detailed) fixedAxis ?: yAxisFor(finite) else null
     val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -138,7 +145,8 @@ fun renderLine(
     val segments = splitAtMissing(lineSegments(points.size, breaks), values)
     val line = linePath(points, segments)
     val secondPoints = second?.let { chartPoints(it, plotW, plotH, pad, axis, xPositions) }.orEmpty()
-    if (detailed && second == null && candle == null && fillArea) {
+    if (detailed && bars != null && axis != null) drawHistogram(canvas, bars, histogramColors, points, axis, plotW, plotH, pad)
+    if (detailed && second == null && candle == null && fillArea && !hideLine) {
         val floor = if (axis != null && areaBase != null) {
             yPosition(areaBase, axis.min, axis.max, plotH, pad)
         } else {
@@ -178,13 +186,13 @@ fun renderLine(
     if (secondPoints.isNotEmpty()) canvas.drawPath(linePath(secondPoints), strokePaint(secondColor, strokePx))
     if (candle != null && axis != null) {
         drawCandles(canvas, candle, values, points, axis, plotW, plotH, pad, strokePx, upColor, downColor)
-    } else {
+    } else if (!hideLine) {
         canvas.drawPath(line, strokePaint(lineColor, strokePx))
     }
     if (detailed) {
         dots.filter { (i, _) -> i in points.indices }.forEach { (i, color) -> drawDot(canvas, points[i], color, backgroundColor, strokePx) }
         if (secondPoints.isNotEmpty()) drawEndDot(canvas, secondPoints.last(), secondColor, backgroundColor, strokePx)
-        if (candle == null) drawEndDot(canvas, points[lastDrawn], lineColor, backgroundColor, strokePx)
+        if (candle == null && !hideLine) drawEndDot(canvas, points[lastDrawn], lineColor, backgroundColor, strokePx)
         if (axis != null && baseline != null && baselineLabel.isNotEmpty()) {
             drawBaselineLabel(canvas, baselineLabel, baseline, values[lastDrawn], axis, text, backgroundColor, plotW, plotH, pad)
         }
@@ -221,6 +229,24 @@ private fun drawCandles(
         val top = minOf(y(open), y(close))
         val bottom = maxOf(y(open), y(close)).coerceAtLeast(top + 1f)
         canvas.drawRect(x - half, top, x + half, bottom, paint)
+    }
+}
+
+/** 0에서 세우는 막대. 폭은 점 간격의 60%(최소 1px), NaN 막대는 건너뛴다. 색이 모자라면 마지막 색을 쓴다. */
+private fun drawHistogram(
+    canvas: Canvas, bars: List<Double>, colors: List<Int>, points: List<Pair<Float, Float>>, axis: YAxis,
+    plotW: Float, plotH: Float, pad: Float,
+) {
+    val step = if (points.size > 1) (plotW - 2 * pad) / (points.size - 1) else plotW
+    val half = (step * 0.3f).coerceAtLeast(0.5f)
+    val zero = yPosition(0.0, axis.min, axis.max, plotH, pad)
+    val paint = Paint()
+    bars.forEachIndexed { i, v ->
+        if (v.isNaN() || i !in points.indices) return@forEachIndexed
+        paint.color = colors.getOrNull(i) ?: colors.lastOrNull() ?: 0x66FFFFFF
+        val y = yPosition(v, axis.min, axis.max, plotH, pad)
+        val x = points[i].first
+        canvas.drawRect(x - half, minOf(y, zero), x + half, maxOf(y, zero).coerceAtLeast(minOf(y, zero) + 1f), paint)
     }
 }
 

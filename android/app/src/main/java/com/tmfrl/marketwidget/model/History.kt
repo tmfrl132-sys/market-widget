@@ -48,6 +48,7 @@ data class YahooBars(
     val open: List<Double?> = emptyList(),
     val high: List<Double?> = emptyList(),
     val low: List<Double?> = emptyList(),
+    val volume: List<Double?> = emptyList(),
 )
 
 private val json = Json { ignoreUnknownKeys = true }
@@ -249,4 +250,11 @@ fun chartOhlc(result: YahooChartResult): Triple<List<Double>, List<Double>, List
         l += round2(minOf(lows[i] ?: minOf(close, open), close, open))
     }
     return Triple(o, h, l)
+}
+
+/** 거래량(v1.7). 수집기 chart_volumes와 같다: chartCloses와 1:1이고, 없거나 길이가 다르면 0이다. */
+fun chartVolumes(result: YahooChartResult): List<Double> {
+    val bars = result.indicators.quote.firstOrNull() ?: return emptyList()
+    val volumes = if (bars.volume.size == bars.close.size) bars.volume else List(bars.close.size) { null }
+    return bars.close.indices.filter { bars.close[it] != null }.map { volumes[it] ?: 0.0 }
 }

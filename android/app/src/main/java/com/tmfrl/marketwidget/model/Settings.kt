@@ -38,6 +38,9 @@ data class WidgetSettings(
     val show_rsi: Boolean = false,
     val show_bollinger: Boolean = false,
     val show_hv: Boolean = false,
+    val show_ma: Boolean = false,
+    val show_macd: Boolean = false,
+    val show_volume: Boolean = false,
 )
 
 /** 차트 보조 표시 체크박스 키(v1.7). 위젯 액션 인자로 쓴다. */
@@ -46,6 +49,9 @@ const val OPTION_DRAWDOWN = "drawdown"
 const val OPTION_BOLLINGER = "bollinger"
 const val OPTION_RSI = "rsi"
 const val OPTION_HV = "hv"
+const val OPTION_MA = "ma"
+const val OPTION_MACD = "macd"
+const val OPTION_VOLUME = "volume"
 
 /** 키에 맞는 보조 표시를 뒤집는다. 모르는 키는 그대로 둔다. */
 fun toggleChartOption(settings: WidgetSettings, key: String): WidgetSettings = when (key) {
@@ -54,6 +60,9 @@ fun toggleChartOption(settings: WidgetSettings, key: String): WidgetSettings = w
     OPTION_BOLLINGER -> settings.copy(show_bollinger = !settings.show_bollinger)
     OPTION_RSI -> settings.copy(show_rsi = !settings.show_rsi)
     OPTION_HV -> settings.copy(show_hv = !settings.show_hv)
+    OPTION_MA -> settings.copy(show_ma = !settings.show_ma)
+    OPTION_MACD -> settings.copy(show_macd = !settings.show_macd)
+    OPTION_VOLUME -> settings.copy(show_volume = !settings.show_volume)
     else -> settings
 }
 

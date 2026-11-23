@@ -118,4 +118,68 @@ class IndicatorsTest {
         assertEquals(listOf(11.0, 12.5, 13.5), h)
         assertEquals(listOf(8.5, 12.0, 12.0), l)
     }
+
+    @Test fun movingAverage_andEma() {
+        assertEquals(listOf(null, 1.5, 2.5, 3.5), movingAverage(listOf(1.0, 2.0, 3.0, 4.0), 2))
+        val e = ema(listOf(1.0, 2.0, 3.0, 4.0), 2)
+        assertNull(e[0])
+        assertEquals(1.5, e[1]!!, 1e-9)
+        assertEquals(2.5, e[2]!!, 1e-9)
+        assertEquals(3.5, e[3]!!, 1e-9)
+        // 앞쪽 null은 건너뛰고 그 뒤부터 시작한다
+        assertEquals(listOf(null, null, 2.5), ema(listOf(null, 2.0, 3.0), 2))
+    }
+
+    @Test fun macd_constantSeriesIsZeroAndStartsAfterWarmup() {
+        val m = macd(List(40) { 100.0 })
+        assertNull(m.macd[24])
+        assertEquals(0.0, m.macd[25]!!, 0.0)
+        assertNull(m.signal[32])
+        assertEquals(0.0, m.signal[33]!!, 0.0)
+        assertEquals(0.0, m.histogram.last()!!, 0.0)
+        // 오르는 계열은 MACD가 양수다
+        assertTrue(macd((1..60).map { it.toDouble() }).macd.last()!! > 0)
+    }
+
+    @Test fun trendPeriodsAndMovingAverageLengths() {
+        assertTrue(supportsTrend(Period.ONE_MONTH))
+        assertFalse(supportsTrend(Period.TODAY))
+        assertEquals(listOf(20, 60, 120), movingAveragePeriods(Period.ONE_YEAR))
+        assertEquals(listOf(13, 26, 52), movingAveragePeriods(Period.FIVE_YEARS))
+    }
+
+    @Test fun volumesFor_slicesAndHidesAllZero() {
+        val q = Quote("KS11", "코스피", 1.0, 0.0, 0.0, daily = daily, daily_volume = daily.map { it * 10 },
+            weekly = listOf(1.0, 2.0), weekly_volume = listOf(0.0, 0.0))
+        assertEquals(daily.takeLast(22).map { it * 10 }, volumesFor(q, Period.ONE_MONTH))
+        assertNull(volumesFor(q, Period.FIVE_YEARS))
+        assertNull(volumesFor(q, Period.TODAY))
+        assertNull(volumesFor(q.copy(daily_volume = listOf(1.0)), Period.ONE_YEAR))
+    }
+
+    @Test fun yearRange_positionWithinLastYear() {
+        val q = Quote("KS11", "코스피", 15.0, 0.0, 0.0, daily = listOf(10.0, 20.0, 12.0))
+        assertEquals(YearRange(10.0, 20.0, 50.0), yearRange(q))
+        assertEquals(100.0, yearRange(q.copy(price = 25.0))!!.position, 0.0)
+        assertNull(yearRange(q.copy(daily = emptyList())))
+    }
+
+    @Test fun toggleChartOption_newKeys() {
+        val s = WidgetSettings()
+        assertTrue(toggleChartOption(s, OPTION_MA).show_ma)
+        assertTrue(toggleChartOption(s, OPTION_MACD).show_macd)
+        assertTrue(toggleChartOption(s, OPTION_VOLUME).show_volume)
+    }
+
+    @Test fun apply_appendsZeroVolumeForNewDailyBar() {
+        val q = Quote("KS11", "코스피", 100.0, 0.0, 0.0, daily = listOf(90.0, 100.0), daily_volume = listOf(5.0, 6.0))
+        val merged = applyLiveQuotes(MarketData("old", listOf(q), emptyList()), mapOf("KS11" to LiveQuote(103.0, 3.0, 3.0, 100.0)), "new").quotes[0]
+        assertEquals(listOf(5.0, 6.0, 0.0), merged.daily_volume)
+    }
+
+    @Test fun chartVolumes_alignWithCloses() {
+        val text = """{"chart": {"result": [{"meta": {}, "timestamp": [1, 2, 3],
+            "indicators": {"quote": [{"close": [10.0, null, 12.0], "volume": [100, 5, null]}]}}]}}"""
+        assertEquals(listOf(100.0, 0.0), chartVolumes(parseYahooChart(text)!!))
+    }
 }

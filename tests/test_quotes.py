@@ -815,3 +815,11 @@ def test_chart_ohlc_without_columns_uses_close():
     payload = {"chart": {"result": [{"meta": {}, "timestamp": [1, 2],
         "indicators": {"quote": [{"close": [10.0, 11.0]}]}}]}}
     assert quotes.chart_ohlc(payload) == {"daily_open": [10.0, 11.0], "daily_high": [10.0, 11.0], "daily_low": [10.0, 11.0]}
+
+
+def test_chart_volumes_align_with_closes_and_default_to_zero():
+    payload = {"chart": {"result": [{"meta": {}, "timestamp": [1, 2, 3],
+        "indicators": {"quote": [{"close": [10.0, None, 12.0], "volume": [100, 5, None]}]}}]}}
+    assert quotes.chart_volumes(payload) == [100.0, 0.0]
+    payload["chart"]["result"][0]["indicators"]["quote"][0].pop("volume")
+    assert quotes.chart_volumes(payload) == [0.0, 0.0]

@@ -64,6 +64,7 @@ data class Series(
     val open: List<Double> = emptyList(),
     val high: List<Double> = emptyList(),
     val low: List<Double> = emptyList(),
+    val volume: List<Double> = emptyList(),
 )
 
 /**
@@ -84,10 +85,10 @@ fun assembleCustomQuote(
     if (daily != null) {
         quote = quote.copy(
             daily = daily.values, daily_dates = daily.dates,
-            daily_open = daily.open, daily_high = daily.high, daily_low = daily.low,
+            daily_open = daily.open, daily_high = daily.high, daily_low = daily.low, daily_volume = daily.volume,
         )
     }
-    if (weekly != null) quote = quote.copy(weekly = weekly.values, weekly_dates = weekly.dates)
+    if (weekly != null) quote = quote.copy(weekly = weekly.values, weekly_dates = weekly.dates, weekly_volume = weekly.volume)
     if (max != null) {
         quote = quote.copy(
             max_closes = max.closes,

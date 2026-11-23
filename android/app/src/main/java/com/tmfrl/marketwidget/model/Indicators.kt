@@ -150,3 +150,75 @@ fun latestOhlc(quote: Quote, newDaily: List<Double>, price: Double): Triple<List
         else -> Triple(o, h, l)
     }
 }
+
+/** 단순 이동평균. 첫 값은 period번째 점이다. */
+fun movingAverage(values: List<Double>, period: Int): List<Double?> =
+    values.indices.map { i -> if (period >= 1 && i >= period - 1) round2(values.subList(i - period + 1, i + 1).average()) else null }
+
+/** 지수 이동평균. period번째 점의 단순 평균에서 시작한다(반올림하지 않는다). null은 건너뛰고 첫 값 앞은 null이다. */
+fun ema(values: List<Double?>, period: Int): List<Double?> {
+    val out = MutableList<Double?>(values.size) { null }
+    val start = values.indexOfFirst { it != null }
+    if (start < 0 || period < 1 || values.size - start < period) return out
+    val seed = values.subList(start, start + period)
+    if (seed.any { it == null }) return out
+    var current = seed.filterNotNull().average()
+    out[start + period - 1] = current
+    val k = 2.0 / (period + 1)
+    for (i in start + period until values.size) {
+        val v = values[i] ?: return out
+        current = v * k + current * (1 - k)
+        out[i] = current
+    }
+    return out
+}
+
+const val MACD_FAST = 12
+const val MACD_SLOW = 26
+const val MACD_SIGNAL = 9
+
+/** MACD = EMA12 − EMA26, 시그널 = MACD의 EMA9, 히스토그램 = MACD − 시그널. 소수 넷째 자리. */
+data class Macd(val macd: List<Double?>, val signal: List<Double?>, val histogram: List<Double?>)
+
+private fun round4(value: Double) = round(value * 10000) / 10000
+
+fun macd(values: List<Double>): Macd {
+    val fast = ema(values, MACD_FAST)
+    val slow = ema(values, MACD_SLOW)
+    val line = values.indices.map { i -> fast[i]?.let { f -> slow[i]?.let { s -> f - s } } }
+    val signal = ema(line, MACD_SIGNAL)
+    val hist = values.indices.map { i -> line[i]?.let { m -> signal[i]?.let { s -> m - s } } }
+    return Macd(line.map { it?.let(::round4) }, signal.map { it?.let(::round4) }, hist.map { it?.let(::round4) })
+}
+
+/** 이동평균선·MACD·거래량을 보이는 기간(일봉·주봉 기간, 1개월~5년). */
+fun supportsTrend(period: Period): Boolean = supportsVolatility(period)
+
+/** 이동평균선 기간. 일봉 20·60·120일, 5년(주봉) 13·26·52주. */
+fun movingAveragePeriods(period: Period): List<Int> = if (period == Period.FIVE_YEARS) listOf(13, 26, 52) else listOf(20, 60, 120)
+
+/**
+ * 이 기간의 거래량(차트 점과 1:1). 1개월~1년은 일봉, 5년은 주봉 거래량이고 길이가 맞을 때만이다.
+ * 모두 0이면(환율·금리·VIX처럼 Yahoo에 거래량이 없는 지표) null이다.
+ */
+fun volumesFor(quote: Quote, period: Period): List<Double>? {
+    val volumes = when (period) {
+        Period.ONE_MONTH, Period.THREE_MONTHS, Period.ONE_YEAR ->
+            quote.daily_volume.takeIf { it.size == quote.daily.size && it.isNotEmpty() }?.let { periodValues(it, emptyList(), period) }
+        Period.FIVE_YEARS -> quote.weekly_volume.takeIf { it.size == quote.weekly.size && it.isNotEmpty() }
+        else -> null
+    } ?: return null
+    return volumes.takeIf { list -> list.size >= 2 && list.any { it > 0 } }
+}
+
+/** 52주 범위 안의 위치. low·high는 최근 1년 일봉(현재가 포함) 최저·최고, position은 0(최저)~100(최고)%. */
+data class YearRange(val low: Double, val high: Double, val position: Double)
+
+fun yearRange(quote: Quote): YearRange? {
+    val price = quote.price ?: return null
+    val closes = quote.daily.takeLast(252).ifEmpty { return null } + price
+    val low = closes.min()
+    val high = closes.max()
+    if (high <= low) return null
+    return YearRange(low, high, round((price - low) / (high - low) * 1000) / 10)
+}

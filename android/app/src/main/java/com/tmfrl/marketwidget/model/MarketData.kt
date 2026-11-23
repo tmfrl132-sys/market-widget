@@ -37,6 +37,8 @@ data class Quote(
     val daily_open: List<Double> = emptyList(), // daily와 1:1 시가(v1.7, 캔들). 옛 data.json에는 없다
     val daily_high: List<Double> = emptyList(), // daily와 1:1 고가
     val daily_low: List<Double> = emptyList(), // daily와 1:1 저가
+    val daily_volume: List<Double> = emptyList(), // daily와 1:1 거래량(v1.7). 거래량이 없는 지표는 0
+    val weekly_volume: List<Double> = emptyList(), // weekly와 1:1 거래량
     val weekly_dates: List<String> = emptyList(), // weekly와 1:1, YYYY-MM-DD
     val max_dates: List<String> = emptyList(), // max_closes와 1:1, YYYY-MM-DD
     val intraday_times: List<Long> = emptyList(), // intraday와 1:1, 초 단위 epoch. 기기가 직접 받는다

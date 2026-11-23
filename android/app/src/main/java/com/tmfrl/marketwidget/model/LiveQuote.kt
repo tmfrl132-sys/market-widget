@@ -608,6 +608,12 @@ private fun withLatestHistory(quote: Quote, price: Double, prevClose: Double, up
         daily_open = open,
         daily_high = high,
         daily_low = low,
+        // 새 일봉이 붙으면 거래량은 0으로 시작하고 다음 수집(30분)에서 채워진다
+        daily_volume = if (quote.daily_volume.size == quote.daily.size && daily.size == quote.daily.size + 1) {
+            quote.daily_volume + 0.0
+        } else {
+            quote.daily_volume
+        },
         chart = withLatestDaily(quote.chart, basis),
         daily = daily,
         daily_dates = withLatestDate(quote.daily_dates, quote.daily.size, daily.size, updatedAt),

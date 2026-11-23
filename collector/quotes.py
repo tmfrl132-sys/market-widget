@@ -82,6 +82,16 @@ def chart_ohlc(payload: dict) -> dict:
     return out
 
 
+def chart_volumes(payload: dict) -> list[float]:
+    """거래량(v1.7). chart_closes와 같은 봉과 1:1이고, 값이 없거나 목록 길이가 다르면 0이다(환율·금리는 Yahoo에 거래량이 없다)."""
+    bars = payload["chart"]["result"][0]["indicators"]["quote"][0]
+    closes = bars["close"]
+    volumes = bars.get("volume") or []
+    if len(volumes) != len(closes):
+        volumes = [None] * len(closes)
+    return [float(v or 0) for c, v in zip(closes, volumes) if c is not None]
+
+
 def chart_dates(payload: dict) -> list[str]:
     """chart_closes와 같은 봉의 시장 현지 날짜(YYYY-MM-DD). null 종가 봉은 날짜도 뺀다."""
     result = payload["chart"]["result"][0]
@@ -273,11 +283,12 @@ def _fetch_weekly(symbol: str, get, prev_item: dict) -> dict:
     """5년 주봉. 실패해도 시세는 살리고 직전 주봉과 날짜를 그대로 쓴다."""
     try:
         payload = _get_chart(symbol, get, "5y", "1wk")
-        return {"weekly": chart_closes(payload), "weekly_dates": chart_dates(payload)}
+        return {"weekly": chart_closes(payload), "weekly_dates": chart_dates(payload), "weekly_volume": chart_volumes(payload)}
     except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as e:
         log.warning("%s 주봉 실패: %s", symbol, e)
         values, dates = _kept(prev_item, "weekly", "weekly_dates")
-        return {"weekly": values, "weekly_dates": dates}
+        volume = prev_item.get("weekly_volume", [])
+        return {"weekly": values, "weekly_dates": dates, "weekly_volume": volume if len(volume) == len(values) else []}
 
 
 def _fetch_max(id_: str, symbol: str, get, prev_item: dict) -> dict:
@@ -325,6 +336,7 @@ def fetch_quotes(prev: dict[str, dict], get=requests.get) -> list[dict]:
                 "daily": daily,
                 "daily_dates": chart_dates(payload),
                 **chart_ohlc(payload),
+                "daily_volume": chart_volumes(payload),
                 **_fetch_weekly(symbol, get, prev.get(id_, {})),
                 **_fetch_max(id_, symbol, get, prev.get(id_, {})),
                 "big_move_pct": big_move_pct(id_, daily),

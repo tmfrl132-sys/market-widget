@@ -14,6 +14,7 @@ import com.tmfrl.marketwidget.model.assembleCustomQuote
 import com.tmfrl.marketwidget.model.chartCloses
 import com.tmfrl.marketwidget.model.chartDates
 import com.tmfrl.marketwidget.model.chartOhlc
+import com.tmfrl.marketwidget.model.chartVolumes
 import com.tmfrl.marketwidget.model.encodeCustomCache
 import com.tmfrl.marketwidget.model.hasDrawdown
 import com.tmfrl.marketwidget.model.historyDue
@@ -166,7 +167,7 @@ class CustomRepository(
         parseYahooChart(get(url))?.let { result ->
             result.meta.exchangeTimezoneName?.let(zone)
             val (open, high, low) = chartOhlc(result)
-            Series(chartCloses(result), chartDates(result), open, high, low)
+            Series(chartCloses(result), chartDates(result), open, high, low, chartVolumes(result))
         }
     }
 

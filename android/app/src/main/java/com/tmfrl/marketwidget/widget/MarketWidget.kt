@@ -112,6 +112,15 @@ import com.tmfrl.marketwidget.model.OPTION_CANDLES
 import com.tmfrl.marketwidget.model.OPTION_DRAWDOWN
 import com.tmfrl.marketwidget.model.OPTION_HV
 import com.tmfrl.marketwidget.model.OPTION_RSI
+import com.tmfrl.marketwidget.model.OPTION_MA
+import com.tmfrl.marketwidget.model.OPTION_MACD
+import com.tmfrl.marketwidget.model.OPTION_VOLUME
+import com.tmfrl.marketwidget.model.macd
+import com.tmfrl.marketwidget.model.movingAverage
+import com.tmfrl.marketwidget.model.movingAveragePeriods
+import com.tmfrl.marketwidget.model.supportsTrend
+import com.tmfrl.marketwidget.model.volumesFor
+import com.tmfrl.marketwidget.model.yearRange
 import com.tmfrl.marketwidget.model.RSI_PERIOD
 import com.tmfrl.marketwidget.model.bollinger
 import com.tmfrl.marketwidget.model.candlesFor
@@ -182,8 +191,35 @@ private const val MAX_CHART_PIXELS = 250_000
 /** 이 높이보다 낮으면 잠수 차트를 빼고 가격 차트(구간 칠과 고점·바닥 점)만 보여준다. */
 private val MIN_STACKED_HEIGHT = 140.dp
 
-/** 보조 표시 체크박스 줄 높이(v1.7). */
+/** 보조 표시 체크박스 줄 높이와 한 줄 개수(v1.7). */
 private val OPTION_ROW_HEIGHT = 22.dp
+private const val OPTIONS_PER_ROW = 4
+
+/** 이동평균선 범례 줄 높이. */
+private val LEGEND_HEIGHT = 14.dp
+
+/** 가격 차트 아래 칸 종류(쌓는 순서). */
+private const val LOWER_DRAWDOWN = "drawdown"
+private const val LOWER_VOLUME = "volume"
+private const val LOWER_RSI = "rsi"
+private const val LOWER_MACD = "macd"
+private const val LOWER_HV = "hv"
+
+/** 이동평균선 색(짧은 것부터). 빨강·파랑은 등락 뜻이라 호박·초록·분홍을 쓴다. */
+private val MA_COLORS = listOf(Color(0xFFFBBF24), Color(0xFF34D399), Color(0xFFF472B6))
+
+/** MACD선·시그널선, 거래량·히스토그램 막대(상승 빨강·하락 파랑을 옅게). */
+private val MACD_LINE = Color(0xFFFBBF24)
+private val MACD_SIGNAL_LINE = Color(0xB3F3F4F6)
+private val VOLUME_UP = Color(0x99FF5A5F)
+private val VOLUME_DOWN = Color(0x994D8DFF)
+
+/** 거래량 눈금 숫자. 1억 이상 "1.2억", 1만 이상 "350만", 그 아래는 정수. */
+private fun formatVolume(value: Double): String = when {
+    value >= 1e8 -> String.format(java.util.Locale.US, "%.1f억", value / 1e8)
+    value >= 1e4 -> String.format(java.util.Locale.US, "%.0f만", value / 1e4)
+    else -> String.format(java.util.Locale.US, "%.0f", value)
+}
 
 private val OPTION_KEY = ActionParameters.Key<String>("option")
 
@@ -786,58 +822,81 @@ private fun ChartPanel(
     val density = LocalContext.current.resources.displayMetrics.density
     // 잠수 차트. 오늘, 낙폭 없는 지표(원/달러·달러인덱스·미 10년물·VIX), 점이 모자라면 null이다.
     // 설정에서 MDD 표시를 끄면 null로 두어 낙폭 줄, 잠수 차트, 최대 낙폭 구간 칠, 고점·바닥 점을 모두 그리지 않는다.
-    // 보조 표시 체크박스(v1.7)는 이 지표·기간에 그릴 수 있을 때만 보인다. 끈 상태에서도 다시 켤 수 있게 설정과 따로 계산한다.
+    // 보조 표시 체크박스(v1.6 MDD, v1.7 그 밖)는 이 지표·기간에 그릴 수 있을 때만 보인다. 끈 상태에서도 다시 켤 수 있게 설정과 따로 계산한다.
     val drawdownAvailable = drawdownChart(quote, period) != null
     val drawdown = if (options.show_drawdown) drawdownChart(quote, period) else null
     val candlesAvailable = combined == null && candlesFor(quote, period) != null
     val candles = if (options.show_candles && candlesAvailable) candlesFor(quote, period) else null
     val momentumAvailable = supportsMomentum(period) && values.size > RSI_PERIOD
     val volatilityAvailable = supportsVolatility(period) && values.size > HV_PERIOD
+    val trendAvailable = supportsTrend(period) && values.size >= 2
+    val volumes = if (combined == null) volumesFor(quote, period)?.takeIf { it.size == values.size } else null
     // 지표는 더 긴 계열(1·3개월은 1년 일봉)로 계산하고 끝을 차트 점 수에 맞춘다
     val indicatorBase = indicatorSeries(quote, period, values) ?: values
-    val rsiValues = if (options.show_rsi && momentumAvailable) nullsAsNaN(tailOf(rsi(indicatorBase), values.size)) else null
-    val hvValues = if (options.show_hv && volatilityAvailable) {
-        nullsAsNaN(tailOf(historicalVolatility(indicatorBase, periodsPerYear(quote, period)), values.size))
+    val tail = { list: List<Double?> -> nullsAsNaN(tailOf(list, values.size)) }
+    val rsiValues = if (options.show_rsi && momentumAvailable) tail(rsi(indicatorBase)) else null
+    val hvValues = if (options.show_hv && volatilityAvailable) tail(historicalVolatility(indicatorBase, periodsPerYear(quote, period))) else null
+    val macdValues = if (options.show_macd && trendAvailable) {
+        macd(indicatorBase).let { m -> Triple(tail(m.macd), tail(m.signal), tail(m.histogram)) }
+            .takeIf { (line, _, _) -> line.any { !it.isNaN() } }
     } else {
         null
     }
     // 로그는 첫 값 대비 배수의 지수로 그린다. 점선 문구에는 실제 값을 그대로 쓴다.
     val logChart = if (logScale && period.supportsLog) logChartFor(values) else null
-    // 볼린저 밴드는 실제 가격 눈금에만 겹친다(로그 눈금에서는 숨긴다)
+    // 볼린저 밴드와 이동평균선은 실제 가격 눈금에만 겹친다(로그 눈금에서는 숨긴다)
     val bands = if (options.show_bollinger && momentumAvailable && logChart == null) {
-        bollinger(indicatorBase).let { b -> listOf(b.upper, b.middle, b.lower).map { nullsAsNaN(tailOf(it, values.size)) } }
+        bollinger(indicatorBase).let { b -> listOf(b.upper, b.middle, b.lower).map(tail) }
     } else {
         null
     }
-    val showOptionRow = drawdownAvailable || candlesAvailable || momentumAvailable
-    // 차트 그림 높이 = 칸 높이 - 위 두 줄(이름·최저최고) - 낙폭 줄 - 보조 표시 줄 - 아래 두 줄(기간 표시, 기간 선택)
+    val maPeriods = movingAveragePeriods(period)
+    val maLines = if (options.show_ma && trendAvailable && logChart == null) maPeriods.map { tail(movingAverage(indicatorBase, it)) } else null
+    val volumeBars = if (options.show_volume) volumes else null
+    // 체크박스: 가격 차트에 겹치는 것(캔들·이평·볼린저·MDD) 다음 아래 칸(거래량·RSI·MACD·HV) 순서로 한 줄에 4개씩
+    val optionRows = listOfNotNull(
+        if (candlesAvailable) Triple(OPTION_CANDLES, "캔들", options.show_candles) else null,
+        if (trendAvailable && logChart == null) Triple(OPTION_MA, "이평", options.show_ma) else null,
+        if (momentumAvailable && logChart == null) Triple(OPTION_BOLLINGER, "볼린저", options.show_bollinger) else null,
+        if (drawdownAvailable) Triple(OPTION_DRAWDOWN, "MDD", options.show_drawdown) else null,
+        if (volumes != null) Triple(OPTION_VOLUME, "거래량", options.show_volume) else null,
+        if (momentumAvailable) Triple(OPTION_RSI, "RSI", options.show_rsi) else null,
+        if (trendAvailable) Triple(OPTION_MACD, "MACD", options.show_macd) else null,
+        if (volatilityAvailable) Triple(OPTION_HV, "HV", options.show_hv) else null,
+    ).chunked(OPTIONS_PER_ROW)
+    // 차트 그림 높이 = 칸 높이 - 위 두 줄(이름·최저최고) - 낙폭 줄 - 이평 범례 - 보조 표시 줄 - 아래 두 줄(기간 표시, 기간 선택)
     val imagesHeight = maxOf(
         40.dp,
-        height - (if (drawdown != null) 100.dp else 84.dp) - (if (showOptionRow) OPTION_ROW_HEIGHT else 0.dp),
+        height - (if (drawdown != null) 100.dp else 84.dp) - OPTION_ROW_HEIGHT * optionRows.size -
+            (if (maLines != null) LEGEND_HEIGHT else 0.dp),
     )
-    // 아래 칸: 잠수 차트(MDD), RSI, HV 순서. 칸이 낮으면 모두 뺀다(낙폭은 가격 차트의 구간 칠과 점으로 남는다).
+    // 아래 칸: 잠수 차트(MDD) → 거래량 → RSI → MACD → HV. 칸이 낮으면 모두 뺀다(낙폭은 가격 차트의 구간 칠과 점으로 남는다).
     val stackable = imagesHeight >= MIN_STACKED_HEIGHT
-    val showUnderwater = drawdown != null && stackable
-    val showRsi = rsiValues != null && stackable
-    val showHv = hvValues != null && stackable
-    val lowerCount = listOf(showUnderwater, showRsi, showHv).count { it }
-    val lowerShare = when (lowerCount) {
+    val lowers = listOfNotNull(
+        LOWER_DRAWDOWN.takeIf { drawdown != null },
+        LOWER_VOLUME.takeIf { volumeBars != null },
+        LOWER_RSI.takeIf { rsiValues != null },
+        LOWER_MACD.takeIf { macdValues != null },
+        LOWER_HV.takeIf { hvValues != null },
+    ).takeIf { stackable }.orEmpty()
+    val lowerShare = when (lowers.size) {
         0 -> 0f
         1 -> UNDERWATER_SHARE
         2 -> 0.24f
-        else -> 0.18f
+        3 -> 0.18f
+        4 -> 0.15f
+        else -> 0.13f
     }
     val lowerHeight = imagesHeight * lowerShare
-    val priceHeight = imagesHeight - lowerHeight * lowerCount
-    val underwaterHeight = lowerHeight
+    val priceHeight = imagesHeight - lowerHeight * lowers.size
     val fullW = width.toPx(density).coerceAtLeast(1)
     val priceH = priceHeight.toPx(density)
     val lowerH = lowerHeight.toPx(density)
     // 모든 그림을 합친 크기로 한 번만 줄인다. 같은 축척이라 폭(px), 글자 크기, 선 굵기가 같다.
-    val (bw, bhTotal) = fitBitmap(fullW, priceH + lowerH * lowerCount, MAX_CHART_PIXELS)
+    val (bw, bhTotal) = fitBitmap(fullW, priceH + lowerH * lowers.size, MAX_CHART_PIXELS)
     val scale = bw.toFloat() / fullW
-    val priceBh = if (lowerCount > 0) (priceH * scale).toInt() else bhTotal
-    val underwaterBh = (lowerH * scale).toInt()
+    val priceBh = if (lowers.isNotEmpty()) (priceH * scale).toInt() else bhTotal
+    val lowerBh = (lowerH * scale).toInt()
     val textPx = DETAIL_TEXT_SP * density * scale
     val axisLabel: (Double) -> String = if (logChart != null) ::formatPowerOfTen else ::formatPrice
     val priceValues = logChart?.values ?: values
@@ -851,20 +910,26 @@ private fun ChartPanel(
         today -> "전일 ${formatPrice(baseline)}"
         else -> "시작 ${formatPrice(baseline)}"
     }
-    // renderLine이 스스로 정하는 축과 같다(값 + 기준값 + 캔들 고가·저가 + 밴드). 숫자 칸 폭을 미리 재려고 먼저 구한다.
+    val overlays = bands?.mapIndexed { i, band -> band to (if (i == 1) BOLLINGER_MID else BOLLINGER_LINE).toArgb() }.orEmpty() +
+        maLines?.mapIndexed { i, line -> line to MA_COLORS[i % MA_COLORS.size].toArgb() }.orEmpty()
+    // renderLine이 스스로 정하는 축과 같다(값 + 기준값 + 캔들 고가·저가 + 겹친 선). 숫자 칸 폭을 미리 재려고 먼저 구한다.
     val priceAxis = logChart?.axis ?: yAxisFor(
-        (priceValues + priceBaseline + candles?.let { it.high + it.low }.orEmpty() + bands?.flatten().orEmpty()).filterNot { it.isNaN() },
+        (priceValues + priceBaseline + candles?.let { it.high + it.low }.orEmpty() + overlays.flatMap { it.first }).filterNot { it.isNaN() },
     )
-    val underwaterAxis = if (showUnderwater) drawdown?.let { yAxisFor(it.depths + 0.0) } else null
-    val hvAxis = if (showHv) hvValues?.filterNot { it.isNaN() }?.let { yAxisFor(it + 0.0) } else null
+    val underwaterAxis = drawdown?.let { yAxisFor(it.depths + 0.0) }
+    val volumeAxis = volumeBars?.let { yAxisFor(it + 0.0) }
+    val macdAxis = macdValues?.let { (line, signal, hist) -> yAxisFor((line + signal + hist + 0.0).filterNot { it.isNaN() }) }
+    val hvAxis = hvValues?.filterNot { it.isNaN() }?.let { yAxisFor(it + 0.0) }
     // 모든 칸의 숫자 칸 중 넓은 것 하나를 함께 써서 그림 영역 폭이 같다. 같은 인덱스가 같은 가로 위치다.
-    val gutter = if (lowerCount > 0 && priceAxis != null) {
+    val gutter = if (lowers.isNotEmpty() && priceAxis != null) {
         commonGutter(
             listOfNotNull(
                 axisLabelWidth(priceAxis, axisLabel, textPx),
-                underwaterAxis?.let { axisLabelWidth(it, ::formatAxisPct, textPx) },
-                if (showRsi) axisLabelWidth(RSI_AXIS, ::formatRsiAxis, textPx) else null,
-                hvAxis?.let { axisLabelWidth(it, ::formatAxisPct, textPx) },
+                underwaterAxis?.takeIf { LOWER_DRAWDOWN in lowers }?.let { axisLabelWidth(it, ::formatAxisPct, textPx) },
+                volumeAxis?.takeIf { LOWER_VOLUME in lowers }?.let { axisLabelWidth(it, ::formatVolume, textPx) },
+                if (LOWER_RSI in lowers) axisLabelWidth(RSI_AXIS, ::formatRsiAxis, textPx) else null,
+                macdAxis?.takeIf { LOWER_MACD in lowers }?.let { axisLabelWidth(it, ::formatPrice, textPx) },
+                hvAxis?.takeIf { LOWER_HV in lowers }?.let { axisLabelWidth(it, ::formatAxisPct, textPx) },
             ),
             textPx,
         )
@@ -875,8 +940,9 @@ private fun ChartPanel(
     val episode = drawdown?.episode
     val shade = drawdown?.let { chart -> chart.episode?.let { it.peak..(it.recovery ?: chart.depths.lastIndex) } }
     val dots = episode?.let { listOf(it.peak to TEXT.toArgb(), it.trough to DOWN.toArgb()) }.orEmpty()
-    // 로그 값도 개수가 같아 같은 눈금을 쓴다. 잠수 차트를 쌓으면 글자는 아래 잠수 차트에만 두고 가격 차트에는 세로 보조선만 그린다.
+    // 로그 값도 개수가 같아 같은 눈금을 쓴다. 아래 칸이 있으면 가로축 글자는 맨 아래 칸에만 두고 나머지는 세로 보조선만 그린다.
     val xAxis = combined?.let(::combinedXAxis) ?: chartXAxis(quote, period)
+    val breaks = breaksFor(combined, today, quote, values.size)
     val bitmap = detailBitmap(
         priceValues, color, bw, priceBh, scale, density,
         priceBaseline,
@@ -884,21 +950,83 @@ private fun ChartPanel(
         axisLabel, null, priceAxis,
         xTicks = xAxis.ticks,
         xPositions = xAxis.positions,
-        showXLabels = lowerCount == 0,
+        showXLabels = lowers.isEmpty(),
         gutterPx = gutter,
         shade = shade,
         dots = dots,
         candles = candles,
-        overlays = bands?.mapIndexed { i, band -> band to (if (i == 1) BOLLINGER_MID else BOLLINGER_LINE).toArgb() }.orEmpty(),
+        overlays = overlays,
         // 고정 24시간 창(v1.6)의 정비 시간·주말은 선을 끊는다
-        breaks = breaksFor(combined, today, quote, values.size),
+        breaks = breaks,
         bands = combined?.let(::combinedBands).orEmpty(),
         // 장마감 지점: 세로 점선 대신 선 위 점과 "장마감 7,417"(v1.3). 창 밖이면 없다.
         marks = listOfNotNull(combined?.let(::combinedCloseMark)),
     )
+    // 아래 칸 그림. 모두 가격 차트와 점이 1:1이고 폭·숫자 칸이 같아 시점이 맞는다.
+    val lowerBitmaps = lowers.map { key ->
+        val xLabels = key == lowers.last()
+        when (key) {
+            // 0% 위 점선에서 아래로 내려가는 잠수 차트이고, 면적을 고르게 칠한다
+            LOWER_DRAWDOWN -> detailBitmap(
+                drawdown!!.depths, DOWN, bw, lowerBh, scale, density,
+                0.0, "", ::formatAxisPct, 0.0, underwaterAxis,
+                marks = drawdown.marks, xTicks = xAxis.ticks, xPositions = xAxis.positions, showXLabels = xLabels,
+                gutterPx = gutter, areaGradient = false, shade = shade,
+            ) to "고점 대비 낙폭"
+            // 거래량: 전 봉보다 오르면 빨강, 내리면 파랑 막대
+            LOWER_VOLUME -> volumeBars!!.let { vol ->
+                detailBitmap(
+                    vol, SUBTLE, bw, lowerBh, scale, density,
+                    null, "", ::formatVolume, null, volumeAxis,
+                    marks = listOf(vol.lastIndex to "거래량 ${formatVolume(vol.last())}"),
+                    xTicks = xAxis.ticks, xPositions = xAxis.positions, showXLabels = xLabels, gutterPx = gutter,
+                    histogram = vol,
+                    histogramColors = values.indices.map { i -> (if (i > 0 && values[i] < values[i - 1]) VOLUME_DOWN else VOLUME_UP).toArgb() },
+                    hideLine = true,
+                )
+            } to "거래량"
+            // RSI(14): 0~100 고정 눈금, 70·30 점선. 끝 값을 "RSI 63.2"로 적는다.
+            LOWER_RSI -> rsiValues!!.let { r ->
+                val last = r.indexOfLast { !it.isNaN() }
+                detailBitmap(
+                    r, RSI_LINE, bw, lowerBh, scale, density,
+                    null, "", ::formatRsiAxis, null, RSI_AXIS,
+                    marks = if (last >= 0) listOf(last to "RSI ${formatIndicator(r[last])}") else emptyList(),
+                    xTicks = xAxis.ticks, xPositions = xAxis.positions, showXLabels = xLabels, gutterPx = gutter,
+                    breaks = breaks, guides = RSI_GUIDES, fillArea = false,
+                )
+            } to "RSI"
+            // MACD(12, 26, 9): MACD선(호박색), 시그널(흰색), 히스토그램(양수 빨강, 음수 파랑), 0 점선
+            LOWER_MACD -> macdValues!!.let { (line, signal, hist) ->
+                val last = line.indexOfLast { !it.isNaN() }
+                detailBitmap(
+                    line, MACD_LINE, bw, lowerBh, scale, density,
+                    0.0, "", ::formatPrice, null, macdAxis,
+                    marks = if (last >= 0) listOf(last to "MACD ${formatPrice(line[last])}") else emptyList(),
+                    xTicks = xAxis.ticks, xPositions = xAxis.positions, showXLabels = xLabels, gutterPx = gutter,
+                    overlays = listOf(signal to MACD_SIGNAL_LINE.toArgb()), fillArea = false,
+                    histogram = hist,
+                    histogramColors = hist.map { (if (it < 0) VOLUME_DOWN else VOLUME_UP).toArgb() },
+                )
+            } to "MACD"
+            // 역사적 변동성(20, 연율 %). 끝 값을 "HV 18.4%"로 적는다.
+            else -> hvValues!!.let { hv ->
+                val last = hv.indexOfLast { !it.isNaN() }
+                detailBitmap(
+                    hv, HV_LINE, bw, lowerBh, scale, density,
+                    null, "", ::formatAxisPct, 0.0, hvAxis,
+                    marks = if (last >= 0) listOf(last to "HV ${formatIndicator(hv[last])}%") else emptyList(),
+                    xTicks = xAxis.ticks, xPositions = xAxis.positions, showXLabels = xLabels, gutterPx = gutter,
+                    areaGradient = false, fillArea = false,
+                )
+            } to "역사적 변동성"
+        }
+    }
     // 마감 뒤(다음 개장 전)면 머리줄 등락이 종가 대비 "마감 후"이고, 둘째 줄 앞에 종가와 그 등락률을 쓴다
     val afterClose = combined?.takeIf { it.afterClose }
     val episodeText = drawdown?.let { formatEpisode(chartDates(quote, period), it.episode, period) }
+    // 52주 위치(v1.7): 일봉·주봉 기간에 최저·최고 줄 끝에 붙인다
+    val yearText = if (supportsTrend(period)) yearRange(quote)?.let { "  ·  52주 위치 ${formatIndicator(it.position)}%" }.orEmpty() else ""
     // 비교 안내. 고르는 중, 오늘·7일 기간, 날짜를 맞출 수 없을 때 최저·최고 줄 자리에 쓴다.
     val compareNotice = when {
         picking -> "비교할 지표 타일을 누르세요"
@@ -915,6 +1043,7 @@ private fun ChartPanel(
     val stateText = state?.let { " · ${formatMarketState(it)}" }.orEmpty()
     // 차트나 머리줄을 누르면 닫는다. 기간 선택 줄은 따로 눌린다.
     val close = actionRunCallback<SelectQuoteAction>(actionParametersOf(QUOTE_ID to quote.id))
+    // Glance는 Row·Column 하나에 자식을 10개까지만 그려서, 그림들과 아래 조작 줄을 각각 한 Column으로 묶는다
     Column(modifier = modifier.fillMaxWidth()) {
         Row(
             modifier = GlanceModifier.fillMaxWidth().clickable(close),
@@ -937,8 +1066,10 @@ private fun ChartPanel(
         } else {
             Text(
                 afterClose?.let { formatCloseSummary(it) + "  ·  " }.orEmpty() +
-                    "최저 ${formatPrice(summary.min)}  ·  최고 ${formatPrice(summary.max)}" + if (auto) "" else "  ·  누르면 닫기",
+                    "최저 ${formatPrice(summary.min)}  ·  최고 ${formatPrice(summary.max)}" + yearText +
+                    if (auto) "" else "  ·  누르면 닫기",
                 style = style(SUBTLE, 10),
+                maxLines = 1,
             )
         }
         if (drawdown != null) {
@@ -950,102 +1081,49 @@ private fun ChartPanel(
             )
         }
         Spacer(GlanceModifier.height(4.dp))
-        Image(
-            provider = ImageProvider(bitmap),
-            contentDescription = "${quote.name} ${period.label} 차트",
-            contentScale = ContentScale.FillBounds,
-            modifier = GlanceModifier.fillMaxWidth().defaultWeight().clickable(close),
-        )
-        if (showUnderwater && drawdown != null) {
-            // 가격과 낙폭은 눈금이 달라 위아래로 놓는다. 점이 1:1이고 폭·숫자 칸이 같아 시점이 맞는다.
-            // 0% 위 점선에서 아래로 내려가는 잠수 차트이고, 면적을 고르게 칠한다.
-            val underwaterBitmap = detailBitmap(
-                drawdown.depths, DOWN, bw, underwaterBh, scale, density,
-                0.0, "", ::formatAxisPct, 0.0, underwaterAxis,
-                marks = drawdown.marks,
-                xTicks = xAxis.ticks,
-                xPositions = xAxis.positions,
-                // 가로축 글자는 맨 아래 칸에만 둔다
-                showXLabels = !showRsi && !showHv,
-                gutterPx = gutter,
-                areaGradient = false,
-                shade = shade,
-            )
-            Image(
-                provider = ImageProvider(underwaterBitmap),
-                contentDescription = "${quote.name} 고점 대비 낙폭 차트",
-                contentScale = ContentScale.FillBounds,
-                modifier = GlanceModifier.fillMaxWidth().height(underwaterHeight).clickable(close),
-            )
-        }
-        if (showRsi && rsiValues != null) {
-            // RSI(14): 0~100 고정 눈금, 70·30 점선. 끝 값을 "RSI 63.2"로 적는다.
-            val last = rsiValues.indexOfLast { !it.isNaN() }
-            val rsiBitmap = detailBitmap(
-                rsiValues, RSI_LINE, bw, underwaterBh, scale, density,
-                null, "", ::formatRsiAxis, null, RSI_AXIS,
-                marks = if (last >= 0) listOf(last to "RSI ${formatIndicator(rsiValues[last])}") else emptyList(),
-                xTicks = xAxis.ticks,
-                xPositions = xAxis.positions,
-                showXLabels = !showHv,
-                gutterPx = gutter,
-                areaGradient = false,
-                breaks = breaksFor(combined, today, quote, values.size),
-                guides = RSI_GUIDES,
-                fillArea = false,
-            )
-            Image(
-                provider = ImageProvider(rsiBitmap),
-                contentDescription = "${quote.name} RSI 차트",
-                contentScale = ContentScale.FillBounds,
-                modifier = GlanceModifier.fillMaxWidth().height(lowerHeight).clickable(close),
-            )
-        }
-        if (showHv && hvValues != null) {
-            // 역사적 변동성(20, 연율 %). 끝 값을 "HV 18.4%"로 적는다.
-            val last = hvValues.indexOfLast { !it.isNaN() }
-            val hvBitmap = detailBitmap(
-                hvValues, HV_LINE, bw, underwaterBh, scale, density,
-                null, "", ::formatAxisPct, 0.0, hvAxis,
-                marks = if (last >= 0) listOf(last to "HV ${formatIndicator(hvValues[last])}%") else emptyList(),
-                xTicks = xAxis.ticks,
-                xPositions = xAxis.positions,
-                gutterPx = gutter,
-                areaGradient = false,
-                fillArea = false,
-            )
-            Image(
-                provider = ImageProvider(hvBitmap),
-                contentDescription = "${quote.name} 역사적 변동성 차트",
-                contentScale = ContentScale.FillBounds,
-                modifier = GlanceModifier.fillMaxWidth().height(lowerHeight).clickable(close),
-            )
-        }
-        Row(modifier = GlanceModifier.fillMaxWidth().padding(top = 2.dp)) {
-            val startLabel = when {
-                combined != null -> combinedStartLabel(combined)
-                // 고정 24시간 창(v1.6)은 창 시작의 서울 시각, 예: "23:30~"
-                today && quote.id in ANCHORED_DAYS && quote.session_start != null -> anchoredStartLabel(quote.session_start)
-                period == Period.MAX && quote.max_start != null -> "${quote.max_start}년~"
-                else -> period.agoLabel
+        // 자식은 이평 범례, 가격 차트, 아래 칸 최대 5개로 7개 이하다
+        Column(modifier = GlanceModifier.fillMaxWidth().defaultWeight()) {
+            if (maLines != null) {
+                Row(modifier = GlanceModifier.fillMaxWidth().height(LEGEND_HEIGHT), verticalAlignment = Alignment.CenterVertically) {
+                    Text("이평", style = style(SUBTLE, 9), maxLines = 1)
+                    maPeriods.forEachIndexed { i, p ->
+                        Text("  ━$p", style = style(MA_COLORS[i % MA_COLORS.size], 9, bold = true), maxLines = 1)
+                    }
+                }
             }
-            Text(startLabel, style = style(SUBTLE, 10))
-            Spacer(GlanceModifier.defaultWeight())
-            // 합친 차트의 현재는 차트 마지막 점이다(장외에는 선물 환산값이라 카드 숫자와 다르다)
-            Text("현재 ${formatPrice(combined?.price ?: quote.price)}", style = style(color, 10, bold = true))
-        }
-        if (showOptionRow) {
-            OptionRow(
-                listOfNotNull(
-                    if (candlesAvailable) Triple(OPTION_CANDLES, "캔들", options.show_candles) else null,
-                    if (drawdownAvailable) Triple(OPTION_DRAWDOWN, "MDD", options.show_drawdown) else null,
-                    if (momentumAvailable && logChart == null) Triple(OPTION_BOLLINGER, "볼린저", options.show_bollinger) else null,
-                    if (momentumAvailable) Triple(OPTION_RSI, "RSI", options.show_rsi) else null,
-                    if (volatilityAvailable) Triple(OPTION_HV, "HV", options.show_hv) else null,
-                ),
+            Image(
+                provider = ImageProvider(bitmap),
+                contentDescription = "${quote.name} ${period.label} 차트",
+                contentScale = ContentScale.FillBounds,
+                modifier = GlanceModifier.fillMaxWidth().defaultWeight().clickable(close),
             )
+            lowerBitmaps.forEach { (lowerBitmap, label) ->
+                Image(
+                    provider = ImageProvider(lowerBitmap),
+                    contentDescription = "${quote.name} $label 차트",
+                    contentScale = ContentScale.FillBounds,
+                    modifier = GlanceModifier.fillMaxWidth().height(lowerHeight).clickable(close),
+                )
+            }
         }
-        PeriodSelector(period, logScale, compareButton)
+        // 자식은 기간 표시 줄, 보조 표시 줄 최대 2개, 기간 선택 줄로 4개 이하다
+        Column(modifier = GlanceModifier.fillMaxWidth()) {
+            Row(modifier = GlanceModifier.fillMaxWidth().padding(top = 2.dp)) {
+                val startLabel = when {
+                    combined != null -> combinedStartLabel(combined)
+                    // 고정 24시간 창(v1.6)은 창 시작의 서울 시각, 예: "23:30~"
+                    today && quote.id in ANCHORED_DAYS && quote.session_start != null -> anchoredStartLabel(quote.session_start)
+                    period == Period.MAX && quote.max_start != null -> "${quote.max_start}년~"
+                    else -> period.agoLabel
+                }
+                Text(startLabel, style = style(SUBTLE, 10))
+                Spacer(GlanceModifier.defaultWeight())
+                // 합친 차트의 현재는 차트 마지막 점이다(장외에는 선물 환산값이라 카드 숫자와 다르다)
+                Text("현재 ${formatPrice(combined?.price ?: quote.price)}", style = style(color, 10, bold = true))
+            }
+            optionRows.forEach { OptionRow(it) }
+            PeriodSelector(period, logScale, compareButton)
+        }
     }
 }
 
@@ -1160,8 +1238,14 @@ private fun detailBitmap(
     overlays: List<Pair<List<Double>, Int>> = emptyList(),
     guides: List<Double> = emptyList(),
     fillArea: Boolean = true,
+    histogram: List<Double>? = null,
+    histogramColors: List<Int> = emptyList(),
+    hideLine: Boolean = false,
 ): Bitmap {
     return renderLine(
+        histogram = histogram,
+        histogramColors = histogramColors,
+        hideLine = hideLine,
         candles = candles,
         upColor = UP.toArgb(),
         downColor = DOWN.toArgb(),
