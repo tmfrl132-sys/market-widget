@@ -871,7 +871,9 @@ private fun ChartPanel(
         height - (if (drawdown != null) 100.dp else 84.dp) - (if (maLines != null) LEGEND_HEIGHT else 0.dp),
     )
     // 차트 높이에 들어가는 만큼 한 열에 넣고, 넘치면 열을 하나 더 둔다(좁은 위젯)
-    val perColumn = maxOf(1, ((imagesHeight + if (maLines != null) LEGEND_HEIGHT else 0.dp) / OPTION_ITEM_HEIGHT).toInt())
+    // 체크박스 열 높이 = 그림 + 이평 범례 + 낙폭 줄(16dp)
+    val optionsHeight = imagesHeight + (if (maLines != null) LEGEND_HEIGHT else 0.dp) + (if (drawdown != null) 16.dp else 0.dp)
+    val perColumn = maxOf(1, (optionsHeight / OPTION_ITEM_HEIGHT).toInt())
     val optionColumns = optionItems.chunked(perColumn)
     val chartWidth = width - OPTION_COLUMN_WIDTH * optionColumns.size
     // 아래 칸: 잠수 차트(MDD) → 거래량 → RSI → MACD → HV. 칸이 낮으면 모두 뺀다(낙폭은 가격 차트의 구간 칠과 점으로 남는다).
@@ -1076,19 +1078,20 @@ private fun ChartPanel(
                 maxLines = 1,
             )
         }
-        if (drawdown != null) {
-            Text(
-                "고점 대비 ${formatDrawdown(drawdown.current)}  ·  MDD ${formatDrawdown(drawdown.mdd)}" +
-                    episodeText?.let { "  ·  $it" }.orEmpty(),
-                style = style(TEXT, 11, bold = true),
-                maxLines = 1,
-            )
-        }
         Spacer(GlanceModifier.height(4.dp))
         // 그림 열 하나와 체크박스 열 최대 2개(v1.7.1)
         Row(modifier = GlanceModifier.fillMaxWidth().defaultWeight()) {
-            // 자식은 이평 범례, 가격 차트, 아래 칸 최대 5개로 7개 이하다
+            // 자식은 낙폭 줄, 이평 범례, 가격 차트, 아래 칸 최대 5개로 8개 이하다.
+            // v1.7.2: 낙폭 줄을 그림 열 안에 둬서 MDD를 켜고 꺼도 오른쪽 체크박스 위치가 바뀌지 않는다.
             Column(modifier = GlanceModifier.defaultWeight().fillMaxHeight()) {
+                if (drawdown != null) {
+                    Text(
+                        "고점 대비 ${formatDrawdown(drawdown.current)}  ·  MDD ${formatDrawdown(drawdown.mdd)}" +
+                            episodeText?.let { "  ·  $it" }.orEmpty(),
+                        style = style(TEXT, 11, bold = true),
+                        maxLines = 1,
+                    )
+                }
                 if (maLines != null) {
                     Row(modifier = GlanceModifier.fillMaxWidth().height(LEGEND_HEIGHT), verticalAlignment = Alignment.CenterVertically) {
                         Text("이평", style = style(SUBTLE, 9), maxLines = 1)
