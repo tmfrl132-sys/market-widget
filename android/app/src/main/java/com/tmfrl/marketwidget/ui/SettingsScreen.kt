@@ -55,6 +55,18 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.tmfrl.marketwidget.data.CustomRepository
 import com.tmfrl.marketwidget.data.EarningsRepository
 import com.tmfrl.marketwidget.model.DEFAULT_EARNINGS
+import com.tmfrl.marketwidget.model.COMPOSITE_OPS
+import com.tmfrl.marketwidget.model.Composite
+import com.tmfrl.marketwidget.model.DEFAULT_COMPOSITES
+import com.tmfrl.marketwidget.model.MAX_COMPOSITES
+import com.tmfrl.marketwidget.model.addComposite
+import com.tmfrl.marketwidget.model.compositesOf
+import com.tmfrl.marketwidget.model.makeComposite
+import com.tmfrl.marketwidget.model.opSymbol
+import com.tmfrl.marketwidget.model.removeComposite
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.foundation.layout.Box
 import com.tmfrl.marketwidget.model.EarningsEntry
 import com.tmfrl.marketwidget.model.KIND_EQUITY
 import com.tmfrl.marketwidget.model.MAX_EARNINGS
@@ -171,12 +183,40 @@ private class SettingsModel(
     val full: Boolean get() = settings.custom.size >= MAX_CUSTOM
 
     fun nameOf(id: String): String =
-        settings.custom.firstOrNull { it.id == id }?.name ?: builtIn.firstOrNull { it.first == id }?.second ?: id
+        settings.custom.firstOrNull { it.id == id }?.name ?: builtIn.firstOrNull { it.first == id }?.second
+            ?: compositesOf(settings).firstOrNull { it.id == id }?.name ?: id
 
     fun detailOf(id: String): String {
+        compositesOf(settings).firstOrNull { it.id == id }?.let { c ->
+            return "${nameOf(c.a)} ${opSymbol(c.op)} ${nameOf(c.b)} · 합성"
+        }
         val ticker = settings.custom.firstOrNull { it.id == id } ?: return "$id · 기본"
         return "${ticker.symbol} · ${customStatusText(entries[id])}"
     }
+
+    // 합성 지표(v1.10). 재료는 기본 지표와 추가 종목이다.
+    var confirmDeleteComposite by mutableStateOf<Composite?>(null)
+    var compositeA by mutableStateOf("KRW")
+    var compositeOp by mutableStateOf("/")
+    var compositeB by mutableStateOf("DXY")
+    val compositeSources: List<String> get() = builtInIds + settings.custom.map { it.id }
+
+    fun createComposite() {
+        val c = makeComposite(compositeA, compositeOp, compositeB, nameOf(compositeA), nameOf(compositeB))
+        when {
+            compositeA == compositeB -> showMessage("서로 다른 두 지표를 고르세요")
+            compositesOf(settings).any { it.id == c.id } -> showMessage("이미 있는 합성 지표입니다")
+            compositesOf(settings).size >= MAX_COMPOSITES -> showMessage("합성 지표는 최대 ${MAX_COMPOSITES}개입니다")
+            else -> {
+                change { addComposite(it, c) }
+                showMessage("${c.name} 타일을 만들었습니다")
+            }
+        }
+    }
+
+    fun deleteComposite(c: Composite) = change { removeComposite(it, c.id) }
+
+    fun restoreComposite(c: Composite) = change { addComposite(it, c) }
 
     suspend fun load() {
         // update는 옛 id(IXIC, ES, NQ)를 옮긴 설정을 저장까지 한다(v1.1). 옮길 것이 없으면 쓰지 않는다.
@@ -406,6 +446,7 @@ fun SettingsScreen(lifecycle: Lifecycle, onAddWidget: () -> Unit) {
                         LazyColumn(modifier = Modifier.weight(1f)) {
                             optionItems(model)
                             indicatorItems(model)
+                            compositeItems(model)
                         }
                         LazyColumn(modifier = Modifier.weight(1f)) {
                             searchItems(model)
@@ -417,6 +458,7 @@ fun SettingsScreen(lifecycle: Lifecycle, onAddWidget: () -> Unit) {
                     LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
                         optionItems(model)
                         indicatorItems(model)
+                        compositeItems(model)
                         item { Spacer(Modifier.height(24.dp)) }
                         searchItems(model)
                         item { Spacer(Modifier.height(24.dp)) }
@@ -501,7 +543,8 @@ private fun LazyListScope.indicatorItems(model: SettingsModel) {
             onUp = { model.up(id) },
             onDown = { model.down(id) },
             onToggle = { model.toggle(id, it) },
-            onDelete = ticker?.let { { model.confirmDelete = it } },
+            onDelete = ticker?.let { { model.confirmDelete = it } }
+                ?: compositesOf(model.settings).firstOrNull { it.id == id }?.let { c -> { model.confirmDeleteComposite = c } },
         )
         HorizontalDivider(color = TILE)
     }
@@ -663,6 +706,53 @@ private fun LazyListScope.earningsItems(model: SettingsModel) {
     }
 }
 
+/**
+ * 합성 지표 만들기(v1.10). 지표 A, 연산, 지표 B를 골라 만들면 위젯에 "A÷B" 타일이 생긴다.
+ * 위 목록에서 다른 지표처럼 켜고 끄고 순서를 바꾸고 지울 수 있다.
+ */
+private fun LazyListScope.compositeItems(model: SettingsModel) {
+    item(key = "composite") {
+        Spacer(Modifier.height(16.dp))
+        Text("합성 지표 만들기", color = TEXT, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+        Text("두 지표를 나누거나 곱해 타일 하나로 봅니다. 예: 원/달러 ÷ 달러인덱스", color = SUBTLE, fontSize = 12.sp)
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Picker(model.nameOf(model.compositeA), model.compositeSources.map { it to model.nameOf(it) }) { model.compositeA = it }
+            Spacer(Modifier.width(4.dp))
+            Picker(opSymbol(model.compositeOp), COMPOSITE_OPS.map { it to opSymbol(it) }) { model.compositeOp = it }
+            Spacer(Modifier.width(4.dp))
+            Picker(model.nameOf(model.compositeB), model.compositeSources.map { it to model.nameOf(it) }) { model.compositeB = it }
+            Spacer(Modifier.weight(1f))
+            Button(onClick = { model.createComposite() }) { Text("만들기") }
+        }
+        val removedDefaults = DEFAULT_COMPOSITES.filter { it.id in model.settings.composites_removed }
+        removedDefaults.forEach { c ->
+            OutlinedButton(onClick = { model.restoreComposite(c) }, modifier = Modifier.padding(top = 4.dp)) { Text("${c.name} 다시 넣기") }
+        }
+        Spacer(Modifier.height(8.dp))
+        HorizontalDivider(color = TILE)
+    }
+}
+
+/** 누르면 고를 수 있는 목록이 펼쳐지는 버튼. */
+@Composable
+private fun Picker(label: String, choices: List<Pair<String, String>>, onPick: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(onClick = { open = true }, contentPadding = PaddingValues(horizontal = 8.dp)) {
+            Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            choices.forEach { (value, text) ->
+                DropdownMenuItem(text = { Text(text) }, onClick = {
+                    open = false
+                    onPick(value)
+                })
+            }
+        }
+    }
+}
+
 @Composable
 private fun ConfirmDialogs(model: SettingsModel) {
     model.confirmDelete?.let { ticker ->
@@ -676,6 +766,19 @@ private fun ConfirmDialogs(model: SettingsModel) {
                 }) { Text("지우기") }
             },
             dismissButton = { TextButton(onClick = { model.confirmDelete = null }) { Text("취소") } },
+        )
+    }
+    model.confirmDeleteComposite?.let { c ->
+        AlertDialog(
+            onDismissRequest = { model.confirmDeleteComposite = null },
+            text = { Text("${c.name} 타일을 지울까요?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    model.confirmDeleteComposite = null
+                    model.deleteComposite(c)
+                }) { Text("지우기") }
+            },
+            dismissButton = { TextButton(onClick = { model.confirmDeleteComposite = null }) { Text("취소") } },
         )
     }
     if (model.confirmReset) {

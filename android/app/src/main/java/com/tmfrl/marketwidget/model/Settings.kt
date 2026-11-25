@@ -44,6 +44,9 @@ data class WidgetSettings(
     // v1.9 실적 일정(차트 종목과 별개). earnings는 사용자가 검색해 더한 종목, earnings_removed는 뺀 기본 종목의 심볼이다.
     val earnings: List<CustomTicker> = emptyList(),
     val earnings_removed: List<String> = emptyList(),
+    // v1.10 합성 지표(두 지표의 사칙연산 타일). composites는 사용자가 만든 것, composites_removed는 지운 기본 합성 지표 id다.
+    val composites: List<Composite> = emptyList(),
+    val composites_removed: List<String> = emptyList(),
 )
 
 /** 차트 보조 표시 체크박스 키(v1.7). 위젯 액션 인자로 쓴다. */
@@ -143,10 +146,10 @@ fun builtInQuotes(quotes: List<Quote>): List<Quote> = quotes.filter { it.id in B
 
 /**
  * 모든 지표 id의 보일 순서(꺼진 것 포함). order에 있는 id를 그 순서로 두고, 없는 id는
- * 기본 지표(수집기 순서) → 추가 종목(추가 순서)으로 뒤에 붙인다. order의 모르는 id는 무시한다.
+ * 기본 지표(수집기 순서) → 추가 종목(추가 순서) → 합성 지표(v1.10)로 뒤에 붙인다. order의 모르는 id는 무시한다.
  */
 fun orderedIds(builtInIds: List<String>, settings: WidgetSettings): List<String> {
-    val all = (builtInIds + settings.custom.map { it.id }).distinct()
+    val all = (builtInIds + settings.custom.map { it.id } + compositesOf(settings).map { it.id }).distinct()
     val known = all.toSet()
     val first = settings.order.filter { it in known }.distinct()
     val placed = first.toSet()
@@ -161,9 +164,11 @@ fun visibleQuotes(allBuiltIn: List<Quote>, custom: List<Quote>, settings: Widget
     // 기본 지표 목록에 없는 id(옛 data.json의 IXIC, ES, NQ)는 그리지 않는다
     val builtIn = builtInQuotes(allBuiltIn)
     val cached = custom.associateBy { it.id }
-    val byId = builtIn.associateBy { it.id } + settings.custom.associate { ticker ->
+    val sources = builtIn.associateBy { it.id } + settings.custom.associate { ticker ->
         ticker.id to (cached[ticker.id] ?: Quote(ticker.id, ticker.name, price = null, change = null, change_pct = null))
     }
+    // 합성 지표는 재료 지표가 꺼져 있어도 계산한다
+    val byId = sources + compositesOf(settings).associate { c -> c.id to compositeQuote(c, sources[c.a], sources[c.b]) }
     val hidden = settings.hidden.toSet()
     return orderedIds(builtIn.map { it.id }, settings).filter { it !in hidden }.mapNotNull { byId[it] }
 }

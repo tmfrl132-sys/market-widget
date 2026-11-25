@@ -13,6 +13,9 @@ class SettingsTest {
 
     private fun ids(quotes: List<Quote>) = quotes.map { it.id }
 
+    /** v1.10 기본 합성 지표(원/달러 ÷ 달러인덱스). 지우지 않으면 맨 뒤에 붙는다. */
+    private val kd = "X:KRW/DXY"
+
     @Test fun builtInNames_matchLiveSymbolsInCollectorOrder() {
         // 수집기 지표가 늘거나 순서가 바뀌면 두 표를 함께 고친다
         assertEquals(LIVE_SYMBOLS.keys.toList(), builtInIds)
@@ -20,13 +23,13 @@ class SettingsTest {
     }
 
     @Test fun visible_defaultIsCollectorOrder() {
-        assertEquals(builtInIds, ids(visibleQuotes(builtIn, emptyList(), WidgetSettings())))
+        assertEquals(builtInIds + kd, ids(visibleQuotes(builtIn, emptyList(), WidgetSettings())))
     }
 
     @Test fun visible_orderFirstThenRestWithoutHidden() {
         val settings = WidgetSettings(order = listOf("GSPC", "KS11"), hidden = listOf("VIX"))
         assertEquals(
-            listOf("GSPC", "KS11", "KQ11", "NDX", "KRW", "DXY", "TNX", "CL", "GC", "BTC"),
+            listOf("GSPC", "KS11", "KQ11", "NDX", "KRW", "DXY", "TNX", "CL", "GC", "BTC", kd),
             ids(visibleQuotes(builtIn, emptyList(), settings)),
         )
     }
@@ -34,26 +37,26 @@ class SettingsTest {
     @Test fun visible_customNotInOrderGoesLastAsPlaceholder() {
         val settings = WidgetSettings(order = listOf("GSPC", "KS11"), hidden = listOf("VIX"), custom = listOf(aapl))
         val quotes = visibleQuotes(builtIn, emptyList(), settings)
-        // 기본 지표에서 1개(VIX)를 끄고 추가 종목 1개를 더한다
-        assertEquals(builtInIds.size, quotes.size)
-        assertEquals("T:AAPL", quotes.last().id)
-        assertEquals(Quote("T:AAPL", "애플", null, null, null), quotes.last())
+        // 기본 지표에서 1개(VIX)를 끄고 추가 종목 1개와 기본 합성 지표를 더한다
+        assertEquals(builtInIds.size + 1, quotes.size)
+        assertEquals(listOf("T:AAPL", kd), ids(quotes).takeLast(2))
+        assertEquals(Quote("T:AAPL", "애플", null, null, null), quotes[quotes.size - 2])
     }
 
     @Test fun visible_unknownOrderIdIgnored() {
         val settings = WidgetSettings(order = listOf("T:AAPL", "XYZ", "KS11"), custom = listOf(aapl))
-        assertEquals(listOf("T:AAPL", "KS11") + builtInIds.drop(1), ids(visibleQuotes(builtIn, emptyList(), settings)))
+        assertEquals(listOf("T:AAPL", "KS11") + builtInIds.drop(1) + kd, ids(visibleQuotes(builtIn, emptyList(), settings)))
     }
 
     @Test fun visible_usesCachedCustomQuote() {
         val cached = Quote("T:AAPL", "애플", 200.0, 1.0, 0.5)
         val quotes = visibleQuotes(builtIn, listOf(cached), WidgetSettings(custom = listOf(aapl)))
-        assertEquals(cached, quotes.last())
+        assertEquals(cached, quotes.first { it.id == "T:AAPL" })
     }
 
     @Test fun visible_dropsCachedCustomNotInSettings() {
         val stale = Quote("T:QQQ", "QQQ", 1.0, 0.0, 0.0)
-        assertEquals(builtInIds, ids(visibleQuotes(builtIn, listOf(stale), WidgetSettings())))
+        assertEquals(builtInIds + kd, ids(visibleQuotes(builtIn, listOf(stale), WidgetSettings())))
     }
 
     @Test fun sanitize_fixedExpectations() {
@@ -65,7 +68,7 @@ class SettingsTest {
     }
 
     @Test fun setHidden_lastShownCannotBeHidden() {
-        val one = WidgetSettings(hidden = builtInIds - "KS11")
+        val one = WidgetSettings(hidden = builtInIds - "KS11" + kd)
         assertEquals(one, setHidden(builtInIds, one, "KS11", hidden = true))
         assertEquals(1, shownCount(builtInIds, one))
     }
@@ -99,14 +102,14 @@ class SettingsTest {
     @Test fun moveUp_topStaysAndOthersSwap() {
         assertEquals(WidgetSettings(), moveUp(builtInIds, WidgetSettings(), "KS11"))
         val moved = moveUp(builtInIds, WidgetSettings(), "KQ11")
-        assertEquals(listOf("KQ11", "KS11") + builtInIds.drop(2), moved.order)
+        assertEquals(listOf("KQ11", "KS11") + builtInIds.drop(2) + kd, moved.order)
     }
 
     @Test fun moveDown_bottomStays() {
         val settings = WidgetSettings(custom = listOf(aapl))
-        assertEquals(settings, moveDown(builtInIds, settings, "T:AAPL"))
+        assertEquals(settings, moveDown(builtInIds, settings, kd))
         val moved = moveDown(builtInIds, settings, "BTC")
-        assertEquals(builtInIds.dropLast(1) + listOf("T:AAPL", "BTC"), moved.order)
+        assertEquals(builtInIds.dropLast(1) + listOf("T:AAPL", "BTC", kd), moved.order)
     }
 
     @Test fun moveUp_toTopMakesFirstTile() {
@@ -152,7 +155,7 @@ class SettingsTest {
         assertEquals(listOf(aapl), migrated.custom)
         // NDX가 옛 IXIC 자리(GSPC 다음)에 꺼진 채로 보이지 않는다
         val visible = ids(visibleQuotes(builtIn, emptyList(), migrated))
-        assertEquals(listOf("GSPC", "KS11", "T:AAPL", "KQ11", "KRW", "DXY", "TNX", "CL", "GC", "BTC"), visible)
+        assertEquals(listOf("GSPC", "KS11", "T:AAPL", "KQ11", "KRW", "DXY", "TNX", "CL", "GC", "BTC", kd), visible)
     }
 
     @Test fun migrate_shownIxicKeepsPlaceAsNdx() {
@@ -173,14 +176,14 @@ class SettingsTest {
         val oldIds = listOf("KS11", "KQ11", "GSPC", "IXIC", "VIX", "KRW", "DXY", "TNX", "CL", "GC", "BTC")
         val migrated = migrateSettings(WidgetSettings(order = listOf("ES", "NQ"), hidden = oldIds))
         assertEquals(listOf("KS11", "KQ11", "VIX", "KRW", "DXY", "TNX", "CL", "GC", "BTC"), migrated.hidden)
-        assertEquals(listOf("GSPC", "NDX"), ids(visibleQuotes(builtIn, emptyList(), migrated)))
-        assertEquals(2, shownCount(builtInIds, migrated))
+        assertEquals(listOf("GSPC", "NDX", kd), ids(visibleQuotes(builtIn, emptyList(), migrated)))
+        assertEquals(3, shownCount(builtInIds, migrated))
     }
 
     @Test fun migrate_shownCustomTickerKeepsEverythingElseHidden() {
         val oldIds = listOf("KS11", "KQ11", "GSPC", "IXIC", "VIX", "KRW", "DXY", "TNX", "CL", "GC", "BTC")
         val migrated = migrateSettings(WidgetSettings(hidden = oldIds, custom = listOf(aapl)))
-        assertEquals(listOf("T:AAPL"), ids(visibleQuotes(builtIn, emptyList(), migrated)))
+        assertEquals(listOf("T:AAPL", kd), ids(visibleQuotes(builtIn, emptyList(), migrated)))
     }
 
     @Test fun migrate_bothOldAndNewIdKeepsFirst() {
@@ -193,9 +196,9 @@ class SettingsTest {
         val oldData = oldIds.map { Quote(it, it, 1.0, 0.0, 0.0) }
         val expected = listOf("KS11", "KQ11", "GSPC", "VIX", "KRW", "DXY", "TNX", "CL", "GC", "BTC")
         assertEquals(expected, ids(builtInQuotes(oldData)))
-        assertEquals(expected, ids(visibleQuotes(oldData, emptyList(), WidgetSettings())))
+        assertEquals(expected + kd, ids(visibleQuotes(oldData, emptyList(), WidgetSettings())))
         // 옛 설정의 IXIC를 옮긴 NDX는 data.json에 아직 없으면 타일이 없다
-        assertEquals(expected, ids(visibleQuotes(oldData, emptyList(), migrateSettings(WidgetSettings(order = listOf("IXIC"))))))
+        assertEquals(expected + kd, ids(visibleQuotes(oldData, emptyList(), migrateSettings(WidgetSettings(order = listOf("IXIC"))))))
     }
 
     @Test fun sanitize_retiredIdSelectionIsCleared() {
