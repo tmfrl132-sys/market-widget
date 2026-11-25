@@ -1,6 +1,7 @@
 package com.tmfrl.marketwidget.data
 
 import com.tmfrl.marketwidget.model.CustomTicker
+import com.tmfrl.marketwidget.model.EarningsDate
 import com.tmfrl.marketwidget.model.KIND_EQUITY
 import com.tmfrl.marketwidget.model.SEOUL
 import com.tmfrl.marketwidget.model.WidgetSettings
@@ -36,6 +37,9 @@ class CustomRepositoryTest {
         "range=1y" to chart(listOf(day1 - 86400, day1, day2), "[90.0, 100.0, 101.0]"),
         "range=5y" to chart(listOf(day1 - 7 * 86400, day1), "[80.0, 101.0]"),
         "interval=30m" to chart(listOf(day1, day2), "[99.0, 101.5]"),
+        // 2026-12-01 21:00 UTC = 뉴욕 16:00(장 마감 뒤)
+        "quoteSummary" to """{"quoteSummary": {"result": [{"calendarEvents": {"earnings": {
+            "earningsDate": [{"raw": 1796158800, "fmt": "2026-12-01"}], "isEarningsDateEstimate": false}}}], "error": null}}""",
         "period1=0" to chart(listOf(day1 - 3 * 86400, day1 - 2 * 86400, day1 - 86400, day1), "[50.0, 120.0, 60.0, 101.0]"),
     )
 
@@ -67,6 +71,8 @@ class CustomRepositoryTest {
         assertEquals(listOf(day1, day2), quote.week_times)
         assertTrue(requested.any { it.contains("period1=${now.toEpochSecond() - 7 * 86400}&period2=${now.toEpochSecond()}&interval=30m") })
         assertEquals("America/New_York", quote.market_tz)
+        assertEquals(EarningsDate(1796158800, estimate = false), entry.earnings)
+        assertEquals(now.toInstant().toEpochMilli(), entry.earnings_at)
         assertFalse(quote.stale)
         assertEquals(now.toInstant().toEpochMilli(), entry.history_at)
         assertEquals(now.toInstant().toEpochMilli(), entry.max_at)
@@ -80,6 +86,7 @@ class CustomRepositoryTest {
         requested.clear()
         repo.refresh(WidgetSettings(custom = listOf(aapl)), now.plusMinutes(5))
         assertTrue(requested.none { it.contains("range=1y") || it.contains("range=5y") || it.contains("period1=0") })
+        // 시세, 오늘 봉, 7일 봉만. 실적 일정은 12시간마다라 다시 받지 않는다
         assertEquals(3, requested.size)
     }
 
@@ -91,6 +98,8 @@ class CustomRepositoryTest {
         assertEquals(102.0, entry.quote.price!!, 0.0)
         assertTrue(entry.quote.stale)
         assertTrue(entry.last_failed)
+        // 실적 일정도 이전 값을 둔다
+        assertEquals(EarningsDate(1796158800, estimate = false), entry.earnings)
         assertEquals(now.toInstant().toEpochMilli(), entry.history_at)
     }
 

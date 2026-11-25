@@ -15,7 +15,7 @@ const val MAX_EVENT_STARS = 3
 
 /**
  * 일정 중요도(별 1~3, v1.6). 제목의 낱말로 정한다. 기준은 발표 당일 시장이 움직이는 정도에 대한 일반적인 인식이다.
- * ★★★ FOMC·CPI·고용보고서, ★★ 한국은행 금리 결정·PCE, ★ GDP. 모르는 일정은 0(별 없음).
+ * ★★★ FOMC·CPI·고용보고서, ★★ 한국은행 금리 결정·PCE·관심 종목 실적(v1.9), ★ GDP. 모르는 일정은 0(별 없음).
  */
 private val EVENT_STARS: List<Pair<String, Int>> = listOf(
     "FOMC" to 3,
@@ -25,6 +25,7 @@ private val EVENT_STARS: List<Pair<String, Int>> = listOf(
     "금리 결정" to 2,
     "PCE" to 2,
     "GDP" to 1,
+    "실적" to 2,
 )
 
 fun eventStars(title: String): Int = EVENT_STARS.filter { title.contains(it.first) }.maxOfOrNull { it.second } ?: 0

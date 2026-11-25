@@ -124,6 +124,7 @@ import com.tmfrl.marketwidget.model.volumesFor
 import com.tmfrl.marketwidget.model.yearRange
 import com.tmfrl.marketwidget.model.Event
 import com.tmfrl.marketwidget.model.eventMarks
+import com.tmfrl.marketwidget.model.earningsEvents
 import com.tmfrl.marketwidget.model.SEOUL
 import com.tmfrl.marketwidget.model.eventDate
 import com.tmfrl.marketwidget.model.eventTime
@@ -329,7 +330,12 @@ private fun MutablePreferences.setSelection(s: ChartSelection) {
  */
 private fun widgetData(context: Context, settings: WidgetSettings = SettingsStore.forContext(context).read()): MarketData? {
     val data = Repository.forContext(context).cached() ?: return null
-    return data.copy(quotes = visibleQuotes(data.quotes, CustomRepository.forContext(context).cached(), settings))
+    val custom = CustomRepository.forContext(context)
+    return data.copy(
+        quotes = visibleQuotes(data.quotes, custom.cached(), settings),
+        // 켜 둔 추가 종목의 실적발표 일정(v1.9)을 경제지표 일정에 합친다
+        events = data.events + earningsEvents(custom.entries(), settings, seoulToday(ZonedDateTime.now())),
+    )
 }
 
 /** 지금 위젯에 보이는 지표. 액션에서 선택 상태를 정리할 때 쓴다. */
@@ -337,7 +343,7 @@ private fun visibleQuotesFor(context: Context): List<Quote> = widgetData(context
 
 /** 앞으로의 일정이 있는지. 없으면 일정 줄이 숨겨져 목록을 닫을 수 없으므로 열림 상태를 무효로 본다. */
 private fun hasUpcomingEvents(context: Context): Boolean {
-    val events = Repository.forContext(context).cached()?.events.orEmpty()
+    val events = widgetData(context)?.events.orEmpty()
     return eventDays(events, seoulToday(ZonedDateTime.now())).isNotEmpty()
 }
 

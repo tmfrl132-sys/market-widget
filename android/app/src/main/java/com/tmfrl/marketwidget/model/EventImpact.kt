@@ -21,7 +21,7 @@ fun eventShortLabel(title: String): String = when {
     "PCE" in title -> "PCE"
     "GDP" in title -> "GDP"
     "한국은행" in title || "금통위" in title -> "금통위"
-    else -> title
+    else -> title.removeSuffix("(예상)")
 }
 
 /** 창 [start, end] 안에 서울 발표 시각이 있는 일정(시각순). 같은 시각의 일정은 이름을 "CPI·고용"처럼 합친다. */
