@@ -21,8 +21,6 @@ data class CustomEntry(
     val max_at: Long? = null,
     val last_ok_at: Long? = null,
     val last_failed: Boolean = false,
-    val earnings: EarningsDate? = null, // 다음 실적발표일(v1.9). 개별 주식만
-    val earnings_at: Long? = null, // 실적 일정을 마지막으로 받은 시각(밀리초)
 )
 
 @Serializable

@@ -125,6 +125,8 @@ import com.tmfrl.marketwidget.model.yearRange
 import com.tmfrl.marketwidget.model.Event
 import com.tmfrl.marketwidget.model.eventMarks
 import com.tmfrl.marketwidget.model.earningsEvents
+import com.tmfrl.marketwidget.model.earningsTickers
+import com.tmfrl.marketwidget.data.EarningsRepository
 import com.tmfrl.marketwidget.model.SEOUL
 import com.tmfrl.marketwidget.model.eventDate
 import com.tmfrl.marketwidget.model.eventTime
@@ -333,8 +335,9 @@ private fun widgetData(context: Context, settings: WidgetSettings = SettingsStor
     val custom = CustomRepository.forContext(context)
     return data.copy(
         quotes = visibleQuotes(data.quotes, custom.cached(), settings),
-        // 켜 둔 추가 종목의 실적발표 일정(v1.9)을 경제지표 일정에 합친다
-        events = data.events + earningsEvents(custom.entries(), settings, seoulToday(ZonedDateTime.now())),
+        // 실적 일정 목록(v1.9, 차트 종목과 별개)의 발표일을 경제지표 일정에 합친다
+        events = data.events +
+            earningsEvents(EarningsRepository.forContext(context).entries(), earningsTickers(settings), seoulToday(ZonedDateTime.now())),
     )
 }
 

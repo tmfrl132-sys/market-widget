@@ -13,6 +13,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.tmfrl.marketwidget.data.CustomRepository
+import com.tmfrl.marketwidget.data.EarningsRepository
 import com.tmfrl.marketwidget.data.Repository
 import com.tmfrl.marketwidget.data.SettingsStore
 import com.tmfrl.marketwidget.widget.redrawAllWidgets
@@ -32,6 +33,8 @@ class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         coroutineScope {
             launch { quietly { Repository.forContext(context).refresh() } }
             launch { quietly { CustomRepository.forContext(context).refresh(SettingsStore.forContext(context).read()) } }
+            // 실적 일정(v1.9). 종목마다 12시간마다라 대부분의 갱신에서는 요청이 없다.
+            launch { quietly { EarningsRepository.forContext(context).refresh(SettingsStore.forContext(context).read()) } }
         }
         redrawAllWidgets(context)
         return Result.success()

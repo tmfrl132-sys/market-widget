@@ -5,9 +5,6 @@ import com.tmfrl.marketwidget.model.CustomCache
 import com.tmfrl.marketwidget.model.CustomEntry
 import com.tmfrl.marketwidget.model.CustomTicker
 import com.tmfrl.marketwidget.model.IntradaySeries
-import com.tmfrl.marketwidget.model.KIND_EQUITY
-import com.tmfrl.marketwidget.model.earningsDue
-import com.tmfrl.marketwidget.model.parseEarnings
 import com.tmfrl.marketwidget.model.LiveQuote
 import com.tmfrl.marketwidget.model.MaxFields
 import com.tmfrl.marketwidget.model.Quote
@@ -57,11 +54,6 @@ private const val NAVER_STOCK_MINUTE_URL = "https://api.stock.naver.com/chart/do
 /** 넥스트레이드(NXT) 1분봉 08:00~20:00. 네이버 차트가 NXT 종목에 쓰는 주소다. NXT 비거래 종목은 빈 목록이다. */
 private const val NAVER_NXT_MINUTE_URL = "https://api.stock.naver.com/chart/domestic/NXT/item/%s/minute"
 
-/** 기본 받기. 테스트가 바꾼 get과 구별하려고 이름 있는 객체로 둔다. */
-private object DefaultGet : (String) -> String {
-    override fun invoke(url: String): String = httpGet(url)
-}
-
 /** 한 번에 받는 추가 종목 수. 한꺼번에 수십 요청을 보내 Yahoo가 막는 일을 줄인다. */
 private const val PARALLEL_TICKERS = 4
 
@@ -71,11 +63,8 @@ private const val PARALLEL_TICKERS = 4
  */
 class CustomRepository(
     private val cacheFile: File,
-    private val get: (String) -> String = DefaultGet,
+    private val get: (String) -> String = ::httpGet,
 ) {
-    /** 실적 일정(v1.9)은 쿠키·crumb가 필요해 YahooSession으로 받는다. 테스트가 get을 바꾸면 그것을 쓴다. */
-    private val getEarnings: (String) -> String = if (get === DefaultGet) YahooSession::get else get
-
 
     fun entries(): List<CustomEntry> = try {
         if (cacheFile.exists()) parseCustomCache(cacheFile.readText()).entries else emptyList()
@@ -139,13 +128,6 @@ class CustomRepository(
             } else {
                 null
             }
-            // 실적 일정(v1.9): 개별 주식만 12시간마다. 받지 못하면 이전 값을 두고, 받았는데 날짜가 없으면 비운다.
-            val earningsText = if (ticker.kind == KIND_EQUITY && earningsDue(previous?.earnings_at, nowMillis)) {
-                orElse<String?>(null) { getEarnings(EARNINGS_URL.format(encoded)) }
-            } else {
-                null
-            }
-            val earnings = earningsText?.let { text -> orElse(previous?.earnings) { parseEarnings(text) } }
             CustomEntry(
                 id = ticker.id,
                 quote = assembleCustomQuote(ticker, previous?.quote, withWeek, daily, weekly, max, marketTz, updatedAt),
@@ -153,8 +135,6 @@ class CustomRepository(
                 max_at = if (max != null) nowMillis else previous?.max_at,
                 last_ok_at = nowMillis,
                 last_failed = false,
-                earnings = if (earningsText != null) earnings else previous?.earnings,
-                earnings_at = if (earningsText != null) nowMillis else previous?.earnings_at,
             )
         } catch (e: CancellationException) {
             throw e
@@ -198,8 +178,6 @@ class CustomRepository(
         max_at = previous?.max_at,
         last_ok_at = previous?.last_ok_at,
         last_failed = true,
-        earnings = previous?.earnings,
-        earnings_at = previous?.earnings_at,
     )
 
     companion object {

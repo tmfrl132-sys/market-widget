@@ -72,17 +72,44 @@ fun earningsEvent(ticker: CustomTicker, earnings: EarningsDate): Event {
 }
 
 /**
- * 위젯에 보일 실적 일정. 켜 둔 추가 종목 중 개별 주식만이고, 서울 날짜가 오늘부터 31일 안인 것이다.
- * 종목을 끄거나 지우면 일정도 사라진다.
+ * 실적 일정 캐시(earnings.json)의 한 줄. at은 마지막으로 받은 시각(밀리초), earnings는 다음 발표일(없으면 null).
  */
-fun earningsEvents(entries: List<CustomEntry>, settings: WidgetSettings, today: LocalDate): List<Event> {
-    val byId = entries.associateBy { it.id }
-    val hidden = settings.hidden.toSet()
-    return settings.custom.filter { it.kind == KIND_EQUITY && it.id !in hidden }.mapNotNull { ticker ->
-        val earnings = byId[ticker.id]?.earnings ?: return@mapNotNull null
+@Serializable
+data class EarningsEntry(val symbol: String, val earnings: EarningsDate? = null, val at: Long? = null, val failed: Boolean = false)
+
+@Serializable
+data class EarningsCache(val entries: List<EarningsEntry> = emptyList())
+
+fun parseEarningsCache(text: String): EarningsCache = try {
+    json.decodeFromString(EarningsCache.serializer(), text)
+} catch (e: IllegalArgumentException) {
+    EarningsCache()
+}
+
+fun encodeEarningsCache(cache: EarningsCache): String = json.encodeToString(EarningsCache.serializer(), cache)
+
+/** 위젯에 보일 실적 일정. 실적 일정 목록의 종목 중 서울 날짜가 오늘부터 31일 안인 것이다. 목록에서 빼면 사라진다. */
+fun earningsEvents(entries: List<EarningsEntry>, tickers: List<CustomTicker>, today: LocalDate): List<Event> {
+    val bySymbol = entries.associateBy { it.symbol }
+    return tickers.mapNotNull { ticker ->
+        val earnings = bySymbol[ticker.symbol]?.earnings ?: return@mapNotNull null
         earningsEvent(ticker, earnings).takeIf { event ->
             val day = eventDate(event) ?: return@takeIf false
             ChronoUnit.DAYS.between(today, day) in 0..EARNINGS_WINDOW_DAYS
+        }
+    }
+}
+
+/** 설정 화면 상태 문구. 예: "12/2(수) 06:00 발표", "12/1(화) 발표 예상", "31일 안 일정 없음", "받는 중". */
+fun earningsStatusText(ticker: CustomTicker, entry: EarningsEntry?): String {
+    val earnings = entry?.earnings
+    return when {
+        entry == null || entry.at == null -> if (entry?.failed == true) "받지 못함 · 다시 시도 중" else "받는 중"
+        earnings == null -> "예정된 발표일 없음"
+        else -> {
+            val event = earningsEvent(ticker, earnings)
+            val day = eventDate(event)?.let(::formatEventDate).orEmpty()
+            day + (eventTime(event)?.let { " $it" }.orEmpty()) + if (earnings.estimate) " 발표 예상" else " 발표"
         }
     }
 }

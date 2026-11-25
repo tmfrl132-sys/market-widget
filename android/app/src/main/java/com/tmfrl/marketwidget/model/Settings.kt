@@ -41,6 +41,9 @@ data class WidgetSettings(
     val show_ma: Boolean = false,
     val show_macd: Boolean = false,
     val show_volume: Boolean = false,
+    // v1.9 실적 일정(차트 종목과 별개). earnings는 사용자가 검색해 더한 종목, earnings_removed는 뺀 기본 종목의 심볼이다.
+    val earnings: List<CustomTicker> = emptyList(),
+    val earnings_removed: List<String> = emptyList(),
 )
 
 /** 차트 보조 표시 체크박스 키(v1.7). 위젯 액션 인자로 쓴다. */
@@ -227,3 +230,56 @@ fun removeCustom(settings: WidgetSettings, id: String): WidgetSettings = setting
 
 /** 기본값으로: 순서를 기본으로, 모두 켜짐. 추가 종목은 지우지 않는다. */
 fun resetOrder(settings: WidgetSettings): WidgetSettings = settings.copy(order = emptyList(), hidden = emptyList())
+
+private fun stock(symbol: String, name: String) = CustomTicker(EARNINGS_PREFIX + symbol, symbol, name, KIND_EQUITY, null)
+
+private const val EARNINGS_PREFIX = "E:"
+
+/** 실적 일정 최대 종목 수(기본 포함). */
+const val MAX_EARNINGS = 40
+
+/** 기본 실적 일정 종목(v1.9). 한국 시가총액 상위와 미국 빅테크·반도체. 설정에서 빼고 다시 넣을 수 있다. */
+val DEFAULT_EARNINGS: List<CustomTicker> = listOf(
+    stock("005930.KS", "삼성전자"),
+    stock("000660.KS", "SK하이닉스"),
+    stock("373220.KS", "LG에너지솔루션"),
+    stock("005380.KS", "현대차"),
+    stock("035420.KS", "NAVER"),
+    stock("AAPL", "애플"),
+    stock("MSFT", "마이크로소프트"),
+    stock("NVDA", "엔비디아"),
+    stock("GOOGL", "알파벳"),
+    stock("AMZN", "아마존"),
+    stock("META", "메타"),
+    stock("TSLA", "테슬라"),
+    stock("AVGO", "브로드컴"),
+    stock("TSM", "TSMC"),
+    stock("MU", "마이크론"),
+)
+
+/** 실적 일정을 받을 종목. 빼지 않은 기본 종목 다음에 사용자가 더한 종목(더한 순서)이다. */
+fun earningsTickers(settings: WidgetSettings): List<CustomTicker> {
+    val removed = settings.earnings_removed.toSet()
+    val defaults = DEFAULT_EARNINGS.filter { it.symbol !in removed }
+    val defaultSymbols = defaults.map { it.symbol }.toSet()
+    return defaults + settings.earnings.filter { it.symbol !in defaultSymbols }.distinctBy { it.symbol }
+}
+
+fun isEarningsAdded(settings: WidgetSettings, symbol: String): Boolean = earningsTickers(settings).any { it.symbol == symbol }
+
+/** 실적 일정에 더한다. 뺀 기본 종목이면 다시 넣고, 이미 있거나 가득 찼으면 그대로다. */
+fun addEarnings(settings: WidgetSettings, symbol: String, name: String): WidgetSettings = when {
+    isEarningsAdded(settings, symbol) -> settings
+    earningsTickers(settings).size >= MAX_EARNINGS -> settings
+    DEFAULT_EARNINGS.any { it.symbol == symbol } -> settings.copy(earnings_removed = settings.earnings_removed - symbol)
+    else -> settings.copy(earnings = settings.earnings + stock(symbol, name))
+}
+
+/** 실적 일정에서 뺀다. 기본 종목은 뺀 목록에 적어 다시 생기지 않게 한다. */
+fun removeEarnings(settings: WidgetSettings, symbol: String): WidgetSettings {
+    val removed = if (DEFAULT_EARNINGS.any { it.symbol == symbol }) (settings.earnings_removed + symbol).distinct() else settings.earnings_removed
+    return settings.copy(earnings = settings.earnings.filter { it.symbol != symbol }, earnings_removed = removed)
+}
+
+/** 뺀 기본 종목을 모두 다시 넣는다. 사용자가 더한 종목은 그대로다. */
+fun restoreEarningsDefaults(settings: WidgetSettings): WidgetSettings = settings.copy(earnings_removed = emptyList())

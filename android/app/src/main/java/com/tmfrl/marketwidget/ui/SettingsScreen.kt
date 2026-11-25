@@ -53,6 +53,17 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.tmfrl.marketwidget.data.CustomRepository
+import com.tmfrl.marketwidget.data.EarningsRepository
+import com.tmfrl.marketwidget.model.DEFAULT_EARNINGS
+import com.tmfrl.marketwidget.model.EarningsEntry
+import com.tmfrl.marketwidget.model.KIND_EQUITY
+import com.tmfrl.marketwidget.model.MAX_EARNINGS
+import com.tmfrl.marketwidget.model.addEarnings
+import com.tmfrl.marketwidget.model.earningsStatusText
+import com.tmfrl.marketwidget.model.earningsTickers
+import com.tmfrl.marketwidget.model.isEarningsAdded
+import com.tmfrl.marketwidget.model.removeEarnings
+import com.tmfrl.marketwidget.model.restoreEarningsDefaults
 import com.tmfrl.marketwidget.data.Repository
 import com.tmfrl.marketwidget.data.SettingsStore
 import com.tmfrl.marketwidget.data.TickerSearchClient
@@ -129,6 +140,7 @@ private class SettingsModel(
 ) {
     private val store = SettingsStore.forContext(context)
     private val customRepository = CustomRepository.forContext(context)
+    private val earningsRepository = EarningsRepository.forContext(context)
 
     var settings by mutableStateOf(WidgetSettings())
     /** 기본 지표(id, 이름). data.json 캐시가 있으면 그 순서·이름, 없으면 BUILT_IN_NAMES. */
@@ -142,6 +154,16 @@ private class SettingsModel(
     var confirmDelete by mutableStateOf<CustomTicker?>(null)
     var confirmReset by mutableStateOf(false)
     private var entriesStamp = -1L
+
+    // 실적 일정(v1.9). 차트 종목 검색과 따로 검색하고 따로 저장한다.
+    var earningsEntries by mutableStateOf(emptyMap<String, EarningsEntry>())
+    var earningsQuery by mutableStateOf("")
+    var earningsResults by mutableStateOf(emptyList<TickerCandidate>())
+    var earningsMessage by mutableStateOf<String?>(null)
+    var earningsSearching by mutableStateOf(false)
+    var earningsChecking by mutableStateOf(emptySet<String>())
+    private var earningsStamp = -1L
+    val earningsFull: Boolean get() = earningsTickers(settings).size >= MAX_EARNINGS
 
     val builtInIds: List<String> get() = builtIn.map { it.first }
     val ids: List<String> get() = orderedIds(builtInIds, settings)
@@ -178,6 +200,69 @@ private class SettingsModel(
         entriesStamp = stamp
         entries = withContext(Dispatchers.IO) { customRepository.entries().associateBy { it.id } }
     }
+
+    /** 실적 일정 캐시가 바뀌었으면 다시 읽는다(상태 문구 "12/2(수) 06:00 발표"). */
+    suspend fun reloadEarnings() {
+        val stamp = withContext(Dispatchers.IO) { earningsRepository.lastModified() }
+        if (stamp == earningsStamp) return
+        earningsStamp = stamp
+        earningsEntries = withContext(Dispatchers.IO) { earningsRepository.entries().associateBy { it.symbol } }
+    }
+
+    suspend fun autoSearchEarnings(text: String) {
+        if (!searchReady(text)) {
+            earningsResults = emptyList()
+            earningsMessage = null
+            return
+        }
+        delay(SEARCH_DELAY_MS)
+        searchEarnings(text)
+    }
+
+    fun searchEarningsNow() {
+        val text = earningsQuery
+        if (text.isBlank()) return
+        scope.launch { searchEarnings(text) }
+    }
+
+    private suspend fun searchEarnings(text: String) {
+        earningsSearching = true
+        try {
+            val result = TickerSearchClient.search(text)
+            earningsResults = mergeCandidates(result.naver.orEmpty(), result.yahoo.orEmpty())
+            earningsMessage = searchMessage(text, result.naver, result.yahoo)
+        } finally {
+            earningsSearching = false
+        }
+    }
+
+    /** 실적 일정에만 더한다(위젯 타일·차트는 생기지 않는다). 개별 주식만 된다. */
+    fun addEarningsTicker(candidate: TickerCandidate) {
+        if (candidate.symbol in earningsChecking) return
+        earningsChecking = earningsChecking + candidate.symbol
+        scope.launch {
+            try {
+                val check = TickerSearchClient.verify(candidate.symbol)
+                when {
+                    check == null -> showMessage("이 종목은 정보를 받을 수 없습니다")
+                    check.kind != KIND_EQUITY -> showMessage("실적 일정은 개별 주식만 추가할 수 있습니다")
+                    else -> {
+                        val before = settings
+                        settings = store.update { addEarnings(it, candidate.symbol, candidate.name) }
+                        if (settings == before) return@launch
+                        RefreshWorker.runOnce(context)
+                        showMessage("${withObjectParticle(candidate.name)} 실적 일정에 추가했습니다")
+                    }
+                }
+            } finally {
+                earningsChecking = earningsChecking - candidate.symbol
+            }
+        }
+    }
+
+    fun removeEarningsTicker(symbol: String) = change { removeEarnings(it, symbol) }
+
+    fun restoreEarnings() = change(fetch = true) { restoreEarningsDefaults(it) }
 
     /** 저장하고 위젯을 다시 그린다. fetch면 바로 받기도 시작한다. */
     private fun change(fetch: Boolean = false, transform: (WidgetSettings) -> WidgetSettings) {
@@ -293,11 +378,13 @@ fun SettingsScreen(lifecycle: Lifecycle, onAddWidget: () -> Unit) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
                 model.reloadEntries()
+                model.reloadEarnings()
                 delay(STATUS_POLL_MS)
             }
         }
     }
     LaunchedEffect(model.query) { model.autoSearch(model.query) }
+    LaunchedEffect(model.earningsQuery) { model.autoSearchEarnings(model.earningsQuery) }
 
     MaterialTheme(colorScheme = COLORS) {
         Scaffold(
@@ -320,7 +407,11 @@ fun SettingsScreen(lifecycle: Lifecycle, onAddWidget: () -> Unit) {
                             optionItems(model)
                             indicatorItems(model)
                         }
-                        LazyColumn(modifier = Modifier.weight(1f)) { searchItems(model) }
+                        LazyColumn(modifier = Modifier.weight(1f)) {
+                            searchItems(model)
+                            item { Spacer(Modifier.height(24.dp)) }
+                            earningsItems(model)
+                        }
                     }
                 } else {
                     LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -328,6 +419,8 @@ fun SettingsScreen(lifecycle: Lifecycle, onAddWidget: () -> Unit) {
                         indicatorItems(model)
                         item { Spacer(Modifier.height(24.dp)) }
                         searchItems(model)
+                        item { Spacer(Modifier.height(24.dp)) }
+                        earningsItems(model)
                     }
                 }
                 Row(
@@ -486,6 +579,85 @@ private fun LazyListScope.searchItems(model: SettingsModel) {
                     },
                 )
             }
+        }
+        HorizontalDivider(color = TILE)
+    }
+}
+
+/**
+ * 실적 일정(v1.9). 위젯 타일과 별개로 실적발표일만 일정 줄·목록에 넣는 종목. 기본 종목은 빼고 다시 넣을 수 있다.
+ */
+private fun LazyListScope.earningsItems(model: SettingsModel) {
+    val tickers = earningsTickers(model.settings)
+    item(key = "earnings-header") {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text("실적 일정", color = TEXT, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.width(8.dp))
+            Text("${tickers.size} / 최대 $MAX_EARNINGS", color = SUBTLE, fontSize = 13.sp)
+            Spacer(Modifier.weight(1f))
+            if (model.settings.earnings_removed.isNotEmpty()) {
+                OutlinedButton(onClick = { model.restoreEarnings() }) { Text("기본 종목 다시 넣기") }
+            }
+        }
+        Text("일정에 실적발표일만 넣습니다. 위젯 타일은 생기지 않습니다.", color = SUBTLE, fontSize = 12.sp)
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            OutlinedTextField(
+                value = model.earningsQuery,
+                onValueChange = { model.earningsQuery = it },
+                placeholder = { Text("실적 일정에 넣을 종목 (예: 카카오, AMD)") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { model.searchEarningsNow() }),
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(8.dp))
+            Button(onClick = { model.searchEarningsNow() }) { Text("검색") }
+        }
+        if (model.earningsSearching) {
+            Text("검색 중…", color = SUBTLE, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
+        }
+        model.earningsMessage?.let { Text(it, color = SUBTLE, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp)) }
+        Spacer(Modifier.height(4.dp))
+    }
+    items(model.earningsResults, key = { "earnings-result-${it.symbol}" }) { candidate ->
+        val added = isEarningsAdded(model.settings, candidate.symbol)
+        val checking = candidate.symbol in model.earningsChecking
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(candidate.name, color = TEXT, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("${candidate.displayCode} · ${candidate.market}", color = SUBTLE, fontSize = 12.sp, maxLines = 1)
+            }
+            Spacer(Modifier.width(8.dp))
+            OutlinedButton(
+                onClick = { model.addEarningsTicker(candidate) },
+                enabled = !added && !checking && !model.earningsFull,
+            ) {
+                Text(
+                    when {
+                        added -> "추가됨"
+                        checking -> "확인 중"
+                        else -> "일정 추가"
+                    },
+                )
+            }
+        }
+        HorizontalDivider(color = TILE)
+    }
+    items(tickers, key = { "earnings-${it.symbol}" }) { ticker ->
+        val isDefault = DEFAULT_EARNINGS.any { it.symbol == ticker.symbol }
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(ticker.name, color = TEXT, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    "${ticker.symbol}${if (isDefault) " · 기본" else ""} · ${earningsStatusText(ticker, model.earningsEntries[ticker.symbol])}",
+                    color = SUBTLE,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            TextButton(onClick = { model.removeEarningsTicker(ticker.symbol) }) { Text("빼기") }
         }
         HorizontalDivider(color = TILE)
     }
